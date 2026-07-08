@@ -1,8 +1,10 @@
-[gd_scene load_steps=2 format=3 uid="uid://de87khk2vm7u"]
+[gd_scene load_steps=3 format=3 uid="uid://de87khk2vm7u"]
 
 [ext_resource type="Texture2D" path="res://assets/pokeemerald/maps/littleroot_town.png" id="1_littleroot_map"]
+[ext_resource type="Script" path="res://scripts/littleroot_probe.gd" id="2_littleroot_probe"]
 
 [node name="Main" type="Node2D" unique_id=1252233730]
+script = ExtResource("2_littleroot_probe")
 
 [node name="Background" type="ColorRect" parent="."]
 offset_right = 1152.0
@@ -22,3 +24,17 @@ offset_top = 14.0
 offset_right = 454.0
 offset_bottom = 37.0
 text = "pokeemerald: LittlerootTown composed from map.bin + metatiles"
+
+[node name="StatusLabel" type="Label" parent="."]
+offset_left = 704.0
+offset_top = 56.0
+offset_right = 1120.0
+offset_bottom = 146.0
+text = "loading manifest"
+
+[node name="PlayerMarker" type="ColorRect" parent="."]
+offset_left = 320.0
+offset_top = 320.0
+offset_right = 348.0
+offset_bottom = 348.0
+color = Color(1, 0.16, 0.08, 0.78)

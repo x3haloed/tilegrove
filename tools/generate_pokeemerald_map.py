@@ -20,6 +20,12 @@ TILE_SIZE = 8
 METATILE_SIZE = 16
 
 
+def image_pixels(image: Image.Image):
+    if hasattr(image, "get_flattened_data"):
+        return image.get_flattened_data()
+    return image.getdata()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate a composed preview PNG from pokeemerald map data."
@@ -34,6 +40,11 @@ def parse_args() -> argparse.Namespace:
         "--output",
         default="godot/assets/pokeemerald/maps/littleroot_town.png",
         help="Output PNG path.",
+    )
+    parser.add_argument(
+        "--manifest-output",
+        default="godot/assets/pokeemerald/maps/littleroot_town.json",
+        help="Output semantic manifest JSON path.",
     )
     return parser.parse_args()
 
@@ -73,12 +84,14 @@ def load_tileset(root: Path, symbol: str) -> dict:
     directory = root / rel
     image = Image.open(directory / "tiles.png").convert("P")
     metatiles = (directory / "metatiles.bin").read_bytes()
+    attributes = (directory / "metatile_attributes.bin").read_bytes()
     return {
         "symbol": symbol,
         "directory": directory,
         "image": image,
         "palettes": load_palettes(directory),
         "metatiles": metatiles,
+        "attributes": attributes,
     }
 
 
@@ -96,7 +109,7 @@ def tile_from_sheet(tileset: dict, tile_index: int, palette_index: int) -> Image
 
     output = Image.new("RGBA", (TILE_SIZE, TILE_SIZE))
     pixels = []
-    for value in indexed_tile.getdata():
+    for value in image_pixels(indexed_tile):
         pixels.append(palette[value])
     output.putdata(pixels)
     return output
@@ -151,12 +164,84 @@ def draw_metatile(
             if layer == 1:
                 tile.putdata([
                     (0, 0, 0, 0) if pixel[3] and pixel[:3] == source_tileset["palettes"][palette_index][0][:3] else pixel
-                    for pixel in tile.getdata()
+                    for pixel in image_pixels(tile)
                 ])
 
             x = dest_x + (quadrant % 2) * TILE_SIZE
             y = dest_y + (quadrant // 2) * TILE_SIZE
             output.alpha_composite(tile, (x, y))
+
+
+def metatile_tileset(primary: dict, secondary: dict, metatile_id: int) -> tuple[dict, int]:
+    if metatile_id < PRIMARY_METATILE_COUNT:
+        return primary, metatile_id
+    return secondary, metatile_id - PRIMARY_METATILE_COUNT
+
+
+def metatile_attributes(primary: dict, secondary: dict, metatile_id: int) -> dict:
+    tileset, local_metatile_id = metatile_tileset(primary, secondary, metatile_id)
+    start = local_metatile_id * 2
+    end = start + 2
+    attribute_bytes = tileset["attributes"][start:end]
+    if len(attribute_bytes) != 2:
+        return {"behavior": None, "layer": None, "tileset": tileset["symbol"]}
+
+    value = struct.unpack("<H", attribute_bytes)[0]
+    return {
+        "behavior": value & 0x00FF,
+        "layer": (value >> 12) & 0x0F,
+        "tileset": tileset["symbol"],
+    }
+
+
+def build_manifest(
+    map_name: str,
+    map_data: dict,
+    layout: dict,
+    primary: dict,
+    secondary: dict,
+    values: tuple[int, ...],
+) -> dict:
+    width = int(layout["width"])
+    height = int(layout["height"])
+    rows = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            raw = values[x + y * width]
+            metatile_id = raw & 0x03FF
+            attrs = metatile_attributes(primary, secondary, metatile_id)
+            row.append(
+                {
+                    "x": x,
+                    "y": y,
+                    "raw": raw,
+                    "metatile_id": metatile_id,
+                    "collision": (raw >> 10) & 0x03,
+                    "elevation": (raw >> 12) & 0x0F,
+                    "passable": ((raw >> 10) & 0x03) == 0,
+                    "behavior": attrs["behavior"],
+                    "layer": attrs["layer"],
+                    "tileset": attrs["tileset"],
+                }
+            )
+        rows.append(row)
+
+    return {
+        "source": "pokeemerald",
+        "map": map_name,
+        "layout": map_data["layout"],
+        "width": width,
+        "height": height,
+        "metatile_size": METATILE_SIZE,
+        "primary_tileset": layout["primary_tileset"],
+        "secondary_tileset": layout["secondary_tileset"],
+        "connections": map_data.get("connections", []),
+        "object_events": map_data.get("object_events", []),
+        "warp_events": map_data.get("warp_events", []),
+        "coord_events": map_data.get("coord_events", []),
+        "cells": rows,
+    }
 
 
 def main() -> None:
@@ -187,6 +272,12 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.save(output_path)
     print(f"Wrote {output_path} ({output.width}x{output.height})")
+
+    manifest = build_manifest(args.map, map_data, layout, primary, secondary, values)
+    manifest_path = Path(args.manifest_output)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"Wrote {manifest_path} ({width}x{height} cells)")
 
 
 if __name__ == "__main__":
