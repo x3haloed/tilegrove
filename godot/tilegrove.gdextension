@@ -5,8 +5,7 @@ compatibility_minimum = "4.2"
 [libraries]
 macos.debug = "res://bin/libtilegrove.dylib"
 macos.release = "res://bin/libtilegrove.dylib"
-linux.debug = "res://bin/libtiegrove.so"
+linux.debug = "res://bin/libtilegrove.so"
 linux.release = "res://bin/libtilegrove.so"
 windows.debug.x86_64 = "res://bin/tilegrove.dll"
 windows.release.x86_64 = "res://bin/tilegrove.dll"
-
