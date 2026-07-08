@@ -1,0 +1,12 @@
+[package]
+name = "tilegrove"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+
+[dependencies]
+godot = { version = "0.5.3", features = ["api-4-6"] }
