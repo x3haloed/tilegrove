@@ -13,6 +13,8 @@ const PLAYER_FRAME_WIDTH := 16
 const PLAYER_STEP_DURATION_SECONDS := 0.16
 const OBJECT_STEP_DURATION_SECONDS := 0.32
 const OBJECT_IDLE_SECONDS := 1.0
+const SSE_AMBIENT_SECONDS := 10.0
+const SSE_SILENCE_SECONDS := 3600.0
 const PLAYER_FACE_FRAMES := {
 	"south": 0,
 	"north": 1,
@@ -51,6 +53,9 @@ var player_step_elapsed := 0.0
 var player_visual_cell_from := Vector2i(10, 15)
 var player_visual_cell_to := Vector2i(10, 15)
 var object_states: Dictionary = {}
+var sse_connections: Array[Dictionary] = []
+var sse_ambient_elapsed := 0.0
+var sse_silence_elapsed := 0.0
 
 
 func _ready() -> void:
@@ -80,6 +85,7 @@ func _process(delta: float) -> void:
 	if not player_is_stepping and interact_pressed():
 		perform_facing_interaction()
 	poll_control_http()
+	process_sse(delta)
 
 
 func interact_pressed() -> bool:
@@ -148,6 +154,7 @@ func enter_map(map_name: String, cell: Vector2i, prefix := "entered") -> bool:
 	update_object_markers()
 	update_player_marker()
 	update_status("%s %s" % [prefix, current_map_name])
+	emit_sse_event("map_entered", stream_map_entered_details(prefix))
 	return true
 
 
@@ -193,6 +200,7 @@ func try_move(delta: Vector2i) -> bool:
 		player_cell = target
 		start_player_step(origin, target)
 		update_status("moved to %s" % cell_text(player_cell))
+		emit_sse_event("player_moved", stream_player_moved_details(origin, target))
 		return true
 
 	if not is_cell_in_bounds(target):
@@ -401,12 +409,15 @@ func start_object_step(landmark: Dictionary, state: Dictionary, delta: Vector2i,
 
 
 func complete_object_step(landmark: Dictionary, state: Dictionary) -> void:
+	var origin: Vector2i = state["from"]
+	var destination: Vector2i = state["to"]
 	state["is_stepping"] = false
 	state["elapsed"] = OBJECT_STEP_DURATION_SECONDS
-	state["cell"] = state["to"]
+	state["cell"] = destination
 	state["from"] = state["cell"]
 	state["idle"] = OBJECT_IDLE_SECONDS
 	update_object_marker_node(landmark, state, false)
+	emit_sse_event("npc_moved", stream_npc_moved_details(landmark, origin, destination, str(state.get("facing", ""))))
 
 
 func object_visual_cell(landmark: Dictionary) -> Vector2:
@@ -1039,6 +1050,7 @@ func show_interaction_result(result: Dictionary) -> void:
 				message_label.text = str(result.get("message", "Doorway target is not loaded yet."))
 		_:
 			message_label.text = str(result.get("message", ""))
+	emit_sse_event("interaction", stream_interaction_details(result))
 	update_interaction_prompt()
 
 
@@ -1283,8 +1295,9 @@ func poll_control_http() -> void:
 			peer.disconnect_from_host()
 			finished.append(connection)
 		elif control_request_complete(request_text):
-			handle_control_request(peer, request_text)
-			peer.disconnect_from_host()
+			var keep_open := handle_control_request(peer, request_text)
+			if not keep_open:
+				peer.disconnect_from_host()
 			finished.append(connection)
 		elif Time.get_ticks_msec() - int(connection["started_msec"]) >= CONTROL_HTTP_REQUEST_TIMEOUT_MSEC:
 			send_control_json(peer, 408, {"ok": false, "message": "Tilegrove control request timed out."})
@@ -1314,7 +1327,7 @@ func control_request_complete(request_text: String) -> bool:
 	return body.to_utf8_buffer().size() >= content_length
 
 
-func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
+func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 	var request := parse_control_request(request_text)
 	var method: String = request["method"]
 	var path: String = request["path"]
@@ -1322,7 +1335,7 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 
 	if method == "OPTIONS":
 		send_control_bytes(peer, 204, "text/plain; charset=utf-8", PackedByteArray())
-		return
+		return false
 
 	match path:
 		"/", "/help":
@@ -1338,8 +1351,15 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 					"POST /interact": "Interact with JSON body like {\"target_id\":\"sign_0_15_13\"}.",
 					"POST /move": "Move with JSON body like {\"direction\":\"east\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
+					"GET /stream": "Open a semantic server-sent event stream of visible world changes.",
 				},
 			})
+		"/stream":
+			if method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use GET /stream."})
+			else:
+				start_sse_connection(peer, query)
+				return true
 		"/maps":
 			if method != "GET":
 				send_control_json(peer, 405, {"ok": false, "message": "Use GET /maps."})
@@ -1387,6 +1407,221 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 				send_control_json(peer, 200, interact_with_target(path.trim_prefix("/interact/")))
 			else:
 				send_control_json(peer, 404, {"ok": false, "message": "Unknown Tilegrove control endpoint. Try GET /help."})
+	return false
+
+
+func start_sse_connection(peer: StreamPeerTCP, _query: Dictionary) -> void:
+	var header_text := "\r\n".join([
+		"HTTP/1.1 200 OK",
+		"Content-Type: text/event-stream; charset=utf-8",
+		"Cache-Control: no-cache",
+		"Access-Control-Allow-Origin: *",
+		"Connection: keep-alive",
+		"",
+		"",
+	])
+	peer.put_data(header_text.to_utf8_buffer())
+	sse_connections.append({"peer": peer})
+	send_sse_event(peer, "hello", stream_hello_details())
+
+
+func process_sse(delta: float) -> void:
+	var closed: Array[Dictionary] = []
+	for connection in sse_connections:
+		var peer: StreamPeerTCP = connection["peer"]
+		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			closed.append(connection)
+	for connection in closed:
+		sse_connections.erase(connection)
+
+	if sse_connections.is_empty():
+		sse_ambient_elapsed = 0.0
+		sse_silence_elapsed = 0.0
+		return
+
+	sse_ambient_elapsed += delta
+	sse_silence_elapsed += delta
+	if sse_ambient_elapsed >= SSE_AMBIENT_SECONDS:
+		sse_ambient_elapsed = 0.0
+		emit_sse_event("ambient_status", stream_ambient_details())
+	if sse_silence_elapsed >= SSE_SILENCE_SECONDS:
+		sse_silence_elapsed = 0.0
+		emit_sse_event("silence", {
+			"summary": "%s is quiet." % current_map_name,
+			"map": current_map_name,
+			"cell": cell_to_dict(player_cell),
+		})
+
+
+func emit_sse_event(kind: String, details: Dictionary) -> void:
+	if sse_connections.is_empty():
+		return
+	if kind != "ambient_status" and kind != "silence":
+		sse_silence_elapsed = 0.0
+	var closed: Array[Dictionary] = []
+	for connection in sse_connections:
+		var peer: StreamPeerTCP = connection["peer"]
+		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			closed.append(connection)
+			continue
+		if send_sse_event(peer, kind, details) != OK:
+			peer.disconnect_from_host()
+			closed.append(connection)
+	for connection in closed:
+		sse_connections.erase(connection)
+
+
+func send_sse_event(peer: StreamPeerTCP, kind: String, details: Dictionary) -> Error:
+	return peer.put_data(sse_event_text(kind, details).to_utf8_buffer())
+
+
+func sse_event_text(kind: String, details: Dictionary) -> String:
+	return "data: %s\n\n" % JSON.stringify({
+		"kind": kind,
+		"details": details,
+	})
+
+
+func stream_hello_details() -> Dictionary:
+	return {
+		"summary": "Tilegrove stream opened on %s at %s." % [current_map_name, cell_text(player_cell)],
+		"map": current_map_name,
+		"cell": cell_to_dict(player_cell),
+		"facing": player_facing,
+		"loaded_map_count": map_registry.size(),
+		"visible_object_count": visible_object_count(),
+		"wandering_object_count": wandering_object_count(),
+		"nearby_interactions": available_interactions(),
+		"control": {
+			"base_url": control_base_url(),
+			"state": "%s/state" % control_base_url(),
+		},
+	}
+
+
+func stream_map_entered_details(prefix: String) -> Dictionary:
+	return {
+		"summary": "%s %s at %s." % [prefix.capitalize(), current_map_name, cell_text(player_cell)],
+		"map": current_map_name,
+		"cell": cell_to_dict(player_cell),
+		"facing": player_facing,
+		"visible_object_count": visible_object_count(),
+		"wandering_object_count": wandering_object_count(),
+		"connections": connection_summaries(),
+	}
+
+
+func stream_player_moved_details(origin: Vector2i, destination: Vector2i) -> Dictionary:
+	return {
+		"summary": "Player walked %s from %s to %s on %s." % [
+			player_facing,
+			cell_text(origin),
+			cell_text(destination),
+			current_map_name,
+		],
+		"map": current_map_name,
+		"from_cell": cell_to_dict(origin),
+		"to_cell": cell_to_dict(destination),
+		"facing": player_facing,
+		"movement": {
+			"duration": PLAYER_STEP_DURATION_SECONDS,
+			"visual_tween": true,
+		},
+	}
+
+
+func stream_npc_moved_details(landmark: Dictionary, origin: Vector2i, destination: Vector2i, facing: String) -> Dictionary:
+	var name := str(landmark.get("name", "Object"))
+	return {
+		"summary": "%s wandered %s from %s to %s on %s." % [
+			name,
+			facing,
+			cell_text(origin),
+			cell_text(destination),
+			current_map_name,
+		],
+		"map": current_map_name,
+		"target_id": str(landmark.get("id", "")),
+		"name": name,
+		"from_cell": cell_to_dict(origin),
+		"to_cell": cell_to_dict(destination),
+		"facing": facing,
+		"movement": {
+			"duration": OBJECT_STEP_DURATION_SECONDS,
+			"visual_tween": true,
+		},
+	}
+
+
+func stream_interaction_details(result: Dictionary) -> Dictionary:
+	var kind := str(result.get("kind", "interaction"))
+	var name := str(result.get("name", kind.capitalize()))
+	var summary := ""
+	match kind:
+		"sign":
+			summary = "Read %s: %s" % [name, stream_preview_text(str(result.get("text", "")))]
+		"object":
+			summary = "Talked to %s: %s" % [name, stream_preview_text(str(result.get("text", result.get("message", ""))))]
+		"doorway":
+			if str(result.get("result_type", "")) == "entered_loaded_doorway":
+				summary = "Entered %s through %s." % [str(result.get("target_map", "")), name]
+			else:
+				summary = "Tried %s; %s" % [name, str(result.get("message", ""))]
+		_:
+			summary = str(result.get("message", "Interaction completed."))
+
+	return {
+		"summary": summary,
+		"map": current_map_name,
+		"cell": cell_to_dict(player_cell),
+		"target_id": str(result.get("target_id", "")),
+		"kind": kind,
+		"action": str(result.get("action", "")),
+		"name": name,
+		"text_preview": stream_preview_text(str(result.get("text", result.get("message", "")))),
+		"result_type": str(result.get("result_type", "")),
+		"target_map": str(result.get("target_map", "")),
+	}
+
+
+func stream_ambient_details() -> Dictionary:
+	return {
+		"summary": "%s has %d visible objects, %d wanderers, and %d nearby interactions." % [
+			current_map_name,
+			visible_object_count(),
+			wandering_object_count(),
+			available_interactions().size(),
+		],
+		"map": current_map_name,
+		"cell": cell_to_dict(player_cell),
+		"facing": player_facing,
+		"visible_object_count": visible_object_count(),
+		"wandering_object_count": wandering_object_count(),
+		"nearby_interactions": available_interactions(),
+	}
+
+
+func stream_preview_text(text: String) -> String:
+	var single_line := text.replace("\n", " ").strip_edges()
+	if single_line.length() <= 96:
+		return single_line
+	return "%s..." % single_line.substr(0, 93)
+
+
+func visible_object_count() -> int:
+	var count := 0
+	for landmark in manifest.get("landmarks", []):
+		if str(landmark.get("kind", "")) == "object":
+			count += 1
+	return count
+
+
+func wandering_object_count() -> int:
+	var count := 0
+	for landmark in manifest.get("landmarks", []):
+		if object_can_idle_wander(landmark):
+			count += 1
+	return count
 
 
 func control_move(body: String, query: Dictionary) -> Dictionary:

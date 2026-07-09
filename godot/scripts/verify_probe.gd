@@ -49,6 +49,16 @@ func _run() -> void:
 		push_error("Expected player to start facing south on the standing frame.")
 		quit(1)
 		return
+	var sse_text: String = root.sse_event_text("hello", root.stream_hello_details())
+	if not sse_text.begins_with("data: ") or not sse_text.contains("\"kind\":\"hello\"") or not sse_text.ends_with("\n\n"):
+		push_error("Expected SSE helper to format compact data events.")
+		quit(1)
+		return
+	var stream_opening: String = await read_stream_opening(root)
+	if not stream_opening.contains("Content-Type: text/event-stream") or not stream_opening.contains("\"kind\":\"hello\""):
+		push_error("Expected GET /stream to open an SSE response with a hello event.")
+		quit(1)
+		return
 
 	if not root.is_cell_passable(Vector2i(10, 15)):
 		push_error("Expected start cell to be passable.")
@@ -294,3 +304,37 @@ func _run() -> void:
 	get_root().remove_child(root)
 	root.free()
 	quit(0)
+
+
+func read_stream_opening(root: Node) -> String:
+	var client := StreamPeerTCP.new()
+	var error := client.connect_to_host("127.0.0.1", int(root.control_http_port))
+	if error != OK:
+		return ""
+
+	for _index in range(30):
+		client.poll()
+		root.poll_control_http()
+		if client.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+			break
+		await process_frame
+
+	if client.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+		return ""
+
+	client.put_data("GET /stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_utf8_buffer())
+	var response := ""
+	for _index in range(30):
+		client.poll()
+		root.poll_control_http()
+		root.process_sse(0.0)
+		var available := client.get_available_bytes()
+		if available > 0:
+			response += client.get_utf8_string(available)
+		if response.contains("\"kind\":\"hello\""):
+			break
+		await process_frame
+
+	client.disconnect_from_host()
+	root.process_sse(0.0)
+	return response
