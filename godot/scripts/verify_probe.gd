@@ -58,6 +58,15 @@ func _run() -> void:
 		push_error("Expected generated object sprites on the map.")
 		quit(1)
 		return
+	if not root.enter_map("LittlerootTown", Vector2i(2, 10), "verify"):
+		push_error("Expected LittlerootTown to be loaded for non-talkable object check.")
+		quit(1)
+		return
+	var truck_result: Dictionary = root.perform_nearest_interaction()
+	if bool(truck_result.get("accepted", false)):
+		push_error("Expected visible truck to be ignored as a talk interaction.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(15, 13), "verify"):
 		push_error("Expected LittlerootTown to be loaded for sign interaction.")
 		quit(1)

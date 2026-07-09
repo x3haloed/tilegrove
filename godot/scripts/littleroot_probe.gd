@@ -581,6 +581,8 @@ func available_interactions(range := 1) -> Array:
 		var kind := str(landmark.get("kind", ""))
 		if kind != "sign" and kind != "doorway" and kind != "object":
 			continue
+		if kind == "object" and not object_is_talkable(landmark):
+			continue
 		var action := "talk"
 		if kind == "sign":
 			action = "read"
@@ -594,6 +596,10 @@ func available_interactions(range := 1) -> Array:
 			"distance": distance,
 		})
 	return interactions
+
+
+func object_is_talkable(landmark: Dictionary) -> bool:
+	return str(landmark.get("text", "")).strip_edges() != ""
 
 
 func nearest_interaction() -> Dictionary:
@@ -710,7 +716,15 @@ func interact_with_sign(landmark: Dictionary, distance: int) -> Dictionary:
 func interact_with_object(landmark: Dictionary, distance: int) -> Dictionary:
 	var text := str(landmark.get("text", ""))
 	if text.is_empty():
-		text = "%s has nothing to say yet." % str(landmark.get("name", "Object"))
+		return {
+			"ok": true,
+			"accepted": false,
+			"target_id": str(landmark.get("id", "")),
+			"kind": "object",
+			"name": str(landmark.get("name", "")),
+			"distance": distance,
+			"message": "%s is visible but not talkable yet." % str(landmark.get("name", "Object")),
+		}
 	return {
 		"ok": true,
 		"accepted": true,
