@@ -166,10 +166,22 @@ func _run() -> void:
 		push_error("Expected right movement to face east and flip the player sprite.")
 		quit(1)
 		return
+	if not bool(east_state.get("movement", {}).get("is_stepping", false)):
+		push_error("Expected right movement to start a visual step tween.")
+		quit(1)
+		return
 	if player_sprite.frame == 0:
 		push_error("Expected right movement to advance to a walking frame.")
 		quit(1)
 		return
+	root.update_player_step(0.08)
+	var mid_step: Dictionary = root.state_snapshot().get("movement", {})
+	var visual_cell: Dictionary = mid_step.get("visual_cell", {})
+	if float(visual_cell.get("x", 0.0)) <= 10.0 or float(visual_cell.get("x", 0.0)) >= 11.0:
+		push_error("Expected visual cell to interpolate between old and new cells.")
+		quit(1)
+		return
+	root.complete_player_step()
 	if not root.try_move(Vector2i.LEFT):
 		push_error("Expected movement left back to start to succeed.")
 		quit(1)
@@ -178,6 +190,7 @@ func _run() -> void:
 		push_error("Expected left movement to face west without horizontal flip.")
 		quit(1)
 		return
+	root.complete_player_step()
 	if root.try_move(Vector2i.LEFT):
 		push_error("Expected movement into blocked cell to fail.")
 		quit(1)
@@ -196,6 +209,7 @@ func _run() -> void:
 		push_error("Expected north edge to cross into Route101.")
 		quit(1)
 		return
+	root.complete_player_step()
 	if root.current_map_name != "Route101" or root.player_cell != Vector2i(10, 19):
 		push_error("Expected Route101 at south edge after crossing, got %s %s." % [root.current_map_name, root.player_cell])
 		quit(1)
@@ -204,6 +218,7 @@ func _run() -> void:
 		push_error("Expected south edge to cross back into LittlerootTown.")
 		quit(1)
 		return
+	root.complete_player_step()
 	if root.current_map_name != "LittlerootTown" or root.player_cell != Vector2i(10, 0):
 		push_error("Expected LittlerootTown at north edge after returning, got %s %s." % [root.current_map_name, root.player_cell])
 		quit(1)
@@ -217,6 +232,7 @@ func _run() -> void:
 		push_error("Expected Route101 north edge to cross into OldaleTown.")
 		quit(1)
 		return
+	root.complete_player_step()
 	if root.current_map_name != "OldaleTown" or root.player_cell != Vector2i(10, 19):
 		push_error("Expected OldaleTown at south edge after crossing, got %s %s." % [root.current_map_name, root.player_cell])
 		quit(1)
@@ -230,6 +246,7 @@ func _run() -> void:
 		push_error("Expected OldaleTown west edge to cross into Route102.")
 		quit(1)
 		return
+	root.complete_player_step()
 	if root.current_map_name != "Route102" or root.player_cell != Vector2i(49, 10):
 		push_error("Expected Route102 at east edge after crossing, got %s %s." % [root.current_map_name, root.player_cell])
 		quit(1)
@@ -243,6 +260,7 @@ func _run() -> void:
 		push_error("Expected Route102 west edge to cross into PetalburgCity with offset.")
 		quit(1)
 		return
+	root.complete_player_step()
 	if root.current_map_name != "PetalburgCity" or root.player_cell != Vector2i(29, 16):
 		push_error("Expected PetalburgCity at east edge after offset crossing, got %s %s." % [root.current_map_name, root.player_cell])
 		quit(1)

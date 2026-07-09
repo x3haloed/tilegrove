@@ -10,6 +10,7 @@ const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
 const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
 const PLAYER_SPRITE_PATH := "res://assets/pokeemerald/object_sprites/player.png"
 const PLAYER_FRAME_WIDTH := 16
+const PLAYER_STEP_DURATION_SECONDS := 0.16
 const PLAYER_FACE_FRAMES := {
 	"south": 0,
 	"north": 1,
@@ -43,7 +44,10 @@ var control_http_port := 0
 var control_http_status := "control endpoint stopped"
 var interact_key_was_down := false
 var player_facing := "south"
-var player_walk_phase := 0
+var player_is_stepping := false
+var player_step_elapsed := 0.0
+var player_visual_cell_from := Vector2i(10, 15)
+var player_visual_cell_to := Vector2i(10, 15)
 
 
 func _ready() -> void:
@@ -55,20 +59,21 @@ func _ready() -> void:
 	update_status("ready")
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	update_player_step(delta)
 	var movement := Vector2i.ZERO
-	if Input.is_action_just_pressed("ui_left"):
+	if not player_is_stepping and Input.is_action_just_pressed("ui_left"):
 		movement = Vector2i.LEFT
-	elif Input.is_action_just_pressed("ui_right"):
+	elif not player_is_stepping and Input.is_action_just_pressed("ui_right"):
 		movement = Vector2i.RIGHT
-	elif Input.is_action_just_pressed("ui_up"):
+	elif not player_is_stepping and Input.is_action_just_pressed("ui_up"):
 		movement = Vector2i.UP
-	elif Input.is_action_just_pressed("ui_down"):
+	elif not player_is_stepping and Input.is_action_just_pressed("ui_down"):
 		movement = Vector2i.DOWN
 
 	if movement != Vector2i.ZERO:
 		try_move(movement)
-	if interact_pressed():
+	if not player_is_stepping and interact_pressed():
 		perform_facing_interaction()
 	poll_control_http()
 
@@ -134,6 +139,7 @@ func enter_map(map_name: String, cell: Vector2i, prefix := "entered") -> bool:
 	player_cell = cell
 	if not is_cell_passable(player_cell):
 		player_cell = nearest_passable_cell(player_cell)
+	reset_player_step()
 	update_object_markers()
 	update_player_marker()
 	update_status("%s %s" % [prefix, current_map_name])
@@ -171,22 +177,22 @@ func load_player_sprite() -> void:
 
 
 func try_move(delta: Vector2i) -> bool:
+	if player_is_stepping:
+		update_status("moving to %s" % cell_text(player_visual_cell_to))
+		return false
+
 	set_player_facing_from_delta(delta)
 	var target := player_cell + delta
 	if is_cell_passable(target):
+		var origin := player_cell
 		player_cell = target
-		player_walk_phase += 1
-		update_player_marker()
-		update_player_sprite_frame(true)
+		start_player_step(origin, target)
 		update_status("moved to %s" % cell_text(player_cell))
 		return true
 
 	if not is_cell_in_bounds(target):
 		var crossed := try_cross_connection(delta, target)
-		if crossed:
-			player_walk_phase += 1
-			update_player_sprite_frame(true)
-		else:
+		if not crossed:
 			update_player_sprite_frame(false)
 		return crossed
 
@@ -251,6 +257,50 @@ func direction_name(delta: Vector2i) -> String:
 
 func facing_delta() -> Vector2i:
 	return direction_delta(player_facing)
+
+
+func reset_player_step() -> void:
+	player_is_stepping = false
+	player_step_elapsed = 0.0
+	player_visual_cell_from = player_cell
+	player_visual_cell_to = player_cell
+	update_player_sprite_frame(false)
+
+
+func start_player_step(origin: Vector2i, target: Vector2i) -> void:
+	player_is_stepping = true
+	player_step_elapsed = 0.0
+	player_visual_cell_from = origin
+	player_visual_cell_to = target
+	update_player_marker()
+	update_player_sprite_frame(true)
+
+
+func update_player_step(delta: float) -> void:
+	if not player_is_stepping:
+		return
+	player_step_elapsed += delta
+	if player_step_elapsed >= PLAYER_STEP_DURATION_SECONDS:
+		complete_player_step()
+		return
+	update_player_marker()
+	update_player_sprite_frame(true)
+
+
+func complete_player_step() -> void:
+	player_is_stepping = false
+	player_step_elapsed = PLAYER_STEP_DURATION_SECONDS
+	player_visual_cell_from = player_cell
+	player_visual_cell_to = player_cell
+	update_player_marker()
+	update_player_sprite_frame(false)
+
+
+func player_visual_cell() -> Vector2:
+	if not player_is_stepping:
+		return Vector2(player_cell)
+	var progress: float = clampf(player_step_elapsed / PLAYER_STEP_DURATION_SECONDS, 0.0, 1.0)
+	return Vector2(player_visual_cell_from).lerp(Vector2(player_visual_cell_to), progress)
 
 
 func connection_direction(delta: Vector2i) -> String:
@@ -386,7 +436,7 @@ func update_player_marker() -> void:
 	var scale_factor := map_sprite.scale.x
 	var marker_size := Vector2(TILE_SIZE, TILE_SIZE) * scale_factor
 	player_marker.size = marker_size
-	player_marker.position = map_sprite.position + Vector2(player_cell * TILE_SIZE) * scale_factor
+	player_marker.position = map_sprite.position + player_visual_cell() * TILE_SIZE * scale_factor
 	if player_sprite.texture != null:
 		player_sprite.scale = map_sprite.scale
 		player_sprite.position = player_sprite_position()
@@ -398,7 +448,9 @@ func update_player_sprite_frame(walking: bool) -> void:
 
 	var frames: Array = PLAYER_WALK_FRAMES.get(player_facing, [])
 	if walking and not frames.is_empty():
-		player_sprite.frame = int(frames[player_walk_phase % frames.size()])
+		var progress: float = clampf(player_step_elapsed / PLAYER_STEP_DURATION_SECONDS, 0.0, 0.999)
+		var frame_index := int(floor(progress * frames.size()))
+		player_sprite.frame = int(frames[frame_index])
 	else:
 		player_sprite.frame = int(PLAYER_FACE_FRAMES.get(player_facing, 0))
 	player_sprite.flip_h = player_facing == "east"
@@ -409,7 +461,7 @@ func player_sprite_position() -> Vector2:
 		return Vector2.ZERO
 	var scale_factor: float = map_sprite.scale.x
 	var source_size := Vector2(PLAYER_FRAME_WIDTH, player_sprite.texture.get_height())
-	var local_position := Vector2(player_cell * TILE_SIZE)
+	var local_position := player_visual_cell() * TILE_SIZE
 	local_position.x += (TILE_SIZE - source_size.x) / 2.0
 	local_position.y += TILE_SIZE - source_size.y
 	return map_sprite.position + local_position * scale_factor
@@ -542,6 +594,17 @@ func state_snapshot() -> Dictionary:
 		"cell": cell_to_dict(player_cell),
 		"facing": player_facing,
 		"facing_cell": cell_to_dict(player_cell + facing_delta()),
+		"movement": {
+			"is_stepping": player_is_stepping,
+			"from_cell": cell_to_dict(player_visual_cell_from),
+			"to_cell": cell_to_dict(player_visual_cell_to),
+			"visual_cell": {
+				"x": player_visual_cell().x,
+				"y": player_visual_cell().y,
+			},
+			"elapsed": player_step_elapsed,
+			"duration": PLAYER_STEP_DURATION_SECONDS,
+		},
 		"collision": int(cell.get("collision", -1)),
 		"elevation": int(cell.get("elevation", -1)),
 		"metatile_id": int(cell.get("metatile_id", -1)),
@@ -716,6 +779,16 @@ func facing_interaction() -> Dictionary:
 
 
 func perform_facing_interaction() -> Dictionary:
+	if player_is_stepping:
+		var moving_result := {
+			"ok": true,
+			"accepted": false,
+			"message": "Finish moving first.",
+			"state": state_snapshot(),
+		}
+		show_interaction_result(moving_result)
+		return moving_result
+
 	var front := facing_interaction()
 	if front.is_empty():
 		return perform_nearest_interaction()
@@ -770,6 +843,15 @@ func show_interaction_result(result: Dictionary) -> void:
 
 
 func interact_with_target(target_id: String) -> Dictionary:
+	if player_is_stepping:
+		return {
+			"ok": true,
+			"accepted": false,
+			"target_id": target_id,
+			"message": "Finish moving first.",
+			"state": state_snapshot(),
+		}
+
 	var landmark := find_landmark(target_id)
 	if landmark.is_empty():
 		return {
