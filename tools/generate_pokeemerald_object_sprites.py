@@ -12,6 +12,7 @@ FRAME_COUNT_BY_WIDTH = {
     144: 9,
 }
 GRAPHICS_ID_OVERRIDES = {
+    "OBJ_EVENT_GFX_PLAYER": "people/brendan/walking.png",
     "OBJ_EVENT_GFX_TRUCK": "misc/truck.png",
 }
 
@@ -100,6 +101,7 @@ def generate_sprite(root: Path, output_dir: Path, graphics_id: str) -> Path | No
 def main() -> None:
     args = parse_args()
     graphics_ids = args.graphics_ids or [
+        "OBJ_EVENT_GFX_PLAYER",
         "OBJ_EVENT_GFX_TWIN",
         "OBJ_EVENT_GFX_FAT_MAN",
         "OBJ_EVENT_GFX_BOY_2",

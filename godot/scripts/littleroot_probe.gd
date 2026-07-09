@@ -8,9 +8,11 @@ const CONTROL_HTTP_REQUEST_TIMEOUT_MSEC := 2500
 const CONTROL_HTTP_MAX_REQUEST_BYTES := 65536
 const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
 const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
+const PLAYER_SPRITE_PATH := "res://assets/pokeemerald/object_sprites/player.png"
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
 @onready var object_markers: Node2D = $ObjectMarkers
+@onready var player_sprite: Sprite2D = $PlayerSprite
 @onready var player_marker: ColorRect = $PlayerMarker
 @onready var status_label: Label = $StatusLabel
 @onready var interaction_label: Label = $InteractionLabel
@@ -31,6 +33,7 @@ var interact_key_was_down := false
 
 func _ready() -> void:
 	load_world_manifests()
+	load_player_sprite()
 	enter_map(current_map_name, player_cell, "ready")
 	start_control_http()
 	update_player_marker()
@@ -136,6 +139,17 @@ func load_map_texture(texture_path: String) -> Texture2D:
 
 	push_warning("Could not load map texture: %s" % texture_path)
 	return null
+
+
+func load_player_sprite() -> void:
+	var texture := load_map_texture(PLAYER_SPRITE_PATH)
+	if texture == null:
+		player_sprite.visible = false
+		player_marker.visible = true
+		return
+	player_sprite.texture = texture
+	player_sprite.visible = true
+	player_marker.visible = false
 
 
 func try_move(delta: Vector2i) -> bool:
@@ -322,6 +336,9 @@ func update_player_marker() -> void:
 	var marker_size := Vector2(TILE_SIZE, TILE_SIZE) * scale_factor
 	player_marker.size = marker_size
 	player_marker.position = map_sprite.position + Vector2(player_cell * TILE_SIZE) * scale_factor
+	if player_sprite.texture != null:
+		player_sprite.scale = map_sprite.scale
+		player_sprite.position = object_sprite_position(player_cell, player_sprite.texture)
 
 
 func update_object_markers() -> void:

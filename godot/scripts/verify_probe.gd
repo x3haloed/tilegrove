@@ -22,7 +22,6 @@ func _run() -> void:
 		push_error("LittlerootTownProbe texture did not load.")
 		quit(1)
 		return
-
 	print("probe texture: %s %sx%s" % [
 		sprite.texture.resource_path,
 		sprite.texture.get_width(),
@@ -31,6 +30,17 @@ func _run() -> void:
 
 	get_root().add_child(root)
 	await process_frame
+
+	var player_sprite := root.get_node_or_null("PlayerSprite") as Sprite2D
+	var player_marker := root.get_node_or_null("PlayerMarker") as ColorRect
+	if player_sprite == null or player_sprite.texture == null or not player_sprite.visible:
+		push_error("Expected generated player sprite to be visible.")
+		quit(1)
+		return
+	if player_marker == null or player_marker.visible:
+		push_error("Expected debug player marker to be hidden when sprite is loaded.")
+		quit(1)
+		return
 
 	if not root.is_cell_passable(Vector2i(10, 15)):
 		push_error("Expected start cell to be passable.")

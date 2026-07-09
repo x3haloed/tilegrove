@@ -20,6 +20,11 @@ centered = false
 
 [node name="ObjectMarkers" type="Node2D" parent="."]
 
+[node name="PlayerSprite" type="Sprite2D" parent="."]
+texture_filter = 1
+z_index = 10
+centered = false
+
 [node name="ProbeLabel" type="Label" parent="."]
 offset_left = 16.0
 offset_top = 14.0
@@ -55,4 +60,5 @@ offset_left = 320.0
 offset_top = 320.0
 offset_right = 348.0
 offset_bottom = 348.0
-color = Color(1, 0.16, 0.08, 0.78)
+visible = false
+color = Color(1, 0.16, 0.08, 0.32)
