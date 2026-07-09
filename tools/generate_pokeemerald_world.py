@@ -111,6 +111,7 @@ def build_registry(pokeemerald_root: Path, output_dir: Path, registry_output: Pa
             "secondary_tileset": manifest["secondary_tileset"],
             "connections": connections,
             "warp_count": len(manifest.get("warp_events", [])),
+            "landmark_count": len(manifest.get("landmarks", [])),
         }
 
     registry = {

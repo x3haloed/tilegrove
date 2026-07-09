@@ -365,6 +365,7 @@ func state_snapshot() -> Dictionary:
 		"blocked_directions": blocked_directions,
 		"connections": connection_summaries(),
 		"warps_here": warps_at_cell(player_cell),
+		"place": place_snapshot(),
 		"nearby_semantic_cells": nearby_semantic_cells(),
 		"control": {
 			"host": CONTROL_HTTP_HOST,
@@ -432,8 +433,50 @@ func map_summaries() -> Array:
 			"layout": str(config.get("layout", "")),
 			"connections": config.get("connections", []),
 			"warp_count": int(config.get("warp_count", 0)),
+			"landmark_count": int(config.get("landmark_count", 0)),
 		})
 	return summaries
+
+
+func place_snapshot() -> Dictionary:
+	return {
+		"here": landmarks_near(player_cell, 0),
+		"nearby": landmarks_near(player_cell, 4),
+	}
+
+
+func look_snapshot(radius := 4) -> Dictionary:
+	return {
+		"ok": true,
+		"map": current_map_name,
+		"cell": cell_to_dict(player_cell),
+		"cell_data": cell_data(player_cell),
+		"here": landmarks_near(player_cell, 0),
+		"nearby_landmarks": landmarks_near(player_cell, radius),
+		"connections": connection_summaries(),
+		"warps_here": warps_at_cell(player_cell),
+	}
+
+
+func landmarks_near(cell: Vector2i, radius: int) -> Array:
+	var result := []
+	for landmark in manifest.get("landmarks", []):
+		var distance := landmark_distance(cell, landmark)
+		if distance <= radius:
+			var copy: Dictionary = landmark.duplicate(true)
+			copy["distance"] = distance
+			result.append(copy)
+	return result
+
+
+func landmark_distance(cell: Vector2i, landmark: Dictionary) -> int:
+	var best_distance := 1000000
+	for raw_cell in landmark.get("cells", []):
+		var landmark_cell := Vector2i(int(raw_cell.get("x", 0)), int(raw_cell.get("y", 0)))
+		var distance: int = abs(cell.x - landmark_cell.x) + abs(cell.y - landmark_cell.y)
+		if distance < best_distance:
+			best_distance = distance
+	return best_distance
 
 
 func warps_at_cell(cell: Vector2i) -> Array:
@@ -573,6 +616,7 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 				"endpoints": {
 					"GET /state": "Return current player cell and blocked/passable directions.",
 					"GET /maps": "Return loaded world maps and their connection summaries.",
+					"GET /look": "Return landmarks, exits, and semantic map features near the player.",
 					"POST /move": "Move with JSON body like {\"direction\":\"east\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
 				},
@@ -587,6 +631,11 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 					"start_map": str(world_registry.get("start_map", "")),
 					"maps": map_summaries(),
 				})
+		"/look":
+			if method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use GET /look."})
+			else:
+				send_control_json(peer, 200, look_snapshot(int(query.get("radius", 4))))
 		"/state":
 			if method != "GET":
 				send_control_json(peer, 405, {"ok": false, "message": "Use GET /state."})

@@ -201,6 +201,107 @@ def metatile_attributes(primary: dict, secondary: dict, metatile_id: int) -> dic
     }
 
 
+def humanize_symbol(value: str) -> str:
+    cleaned = value
+    for prefix in (
+        "MAP_",
+        "OBJ_EVENT_GFX_",
+        "LOCALID_",
+        "FLAG_",
+        "MOVEMENT_TYPE_",
+        "TRAINER_TYPE_",
+        "BG_EVENT_",
+    ):
+        cleaned = cleaned.removeprefix(prefix)
+    return cleaned.replace("_", " ").title()
+
+
+def point_cell(x: int, y: int) -> dict:
+    return {"x": int(x), "y": int(y)}
+
+
+def boundary_cells(rows: list[list[dict]], direction: str) -> list[dict]:
+    height = len(rows)
+    width = len(rows[0]) if height else 0
+    cells = []
+    if direction == "up":
+        candidates = [(x, 0) for x in range(width)]
+    elif direction == "down":
+        candidates = [(x, height - 1) for x in range(width)]
+    elif direction == "left":
+        candidates = [(0, y) for y in range(height)]
+    elif direction == "right":
+        candidates = [(width - 1, y) for y in range(height)]
+    else:
+        candidates = []
+
+    for x, y in candidates:
+        if rows[y][x]["passable"]:
+            cells.append(point_cell(x, y))
+    return cells
+
+
+def build_landmarks(map_data: dict, rows: list[list[dict]]) -> list[dict]:
+    landmarks = []
+    for index, connection in enumerate(map_data.get("connections", [])):
+        direction = connection.get("direction", "")
+        target = connection.get("map", "")
+        landmarks.append({
+            "id": f"exit_{direction}_{index}",
+            "kind": "exit",
+            "name": f"{humanize_symbol(direction)} exit to {humanize_symbol(target)}",
+            "cells": boundary_cells(rows, direction),
+            "direction": direction,
+            "target_map_raw": target,
+            "offset": int(connection.get("offset", 0)),
+        })
+
+    for index, warp in enumerate(map_data.get("warp_events", [])):
+        target = warp.get("dest_map", "")
+        landmarks.append({
+            "id": f"warp_{index}_{warp.get('x', 0)}_{warp.get('y', 0)}",
+            "kind": "doorway",
+            "name": f"Doorway to {humanize_symbol(target)}",
+            "cells": [point_cell(warp.get("x", 0), warp.get("y", 0))],
+            "target_map_raw": target,
+            "dest_warp_id": str(warp.get("dest_warp_id", "")),
+        })
+
+    for index, event in enumerate(map_data.get("bg_events", [])):
+        event_type = event.get("type", "background")
+        script = event.get("script", "")
+        landmarks.append({
+            "id": f"bg_{index}_{event.get('x', 0)}_{event.get('y', 0)}",
+            "kind": event_type,
+            "name": f"{humanize_symbol(event_type)}: {humanize_symbol(script)}",
+            "cells": [point_cell(event.get("x", 0), event.get("y", 0))],
+            "script": script,
+        })
+
+    for index, event in enumerate(map_data.get("object_events", [])):
+        graphics = event.get("graphics_id", "object")
+        landmarks.append({
+            "id": f"object_{index}_{event.get('x', 0)}_{event.get('y', 0)}",
+            "kind": "object",
+            "name": humanize_symbol(graphics),
+            "cells": [point_cell(event.get("x", 0), event.get("y", 0))],
+            "graphics_id": graphics,
+            "script": event.get("script", ""),
+        })
+
+    for index, event in enumerate(map_data.get("coord_events", [])):
+        script = event.get("script", "")
+        landmarks.append({
+            "id": f"trigger_{index}_{event.get('x', 0)}_{event.get('y', 0)}",
+            "kind": "trigger",
+            "name": f"Trigger: {humanize_symbol(script)}",
+            "cells": [point_cell(event.get("x", 0), event.get("y", 0))],
+            "script": script,
+        })
+
+    return landmarks
+
+
 def build_manifest(
     map_name: str,
     map_data: dict,
@@ -247,6 +348,8 @@ def build_manifest(
         "object_events": map_data.get("object_events", []),
         "warp_events": map_data.get("warp_events", []),
         "coord_events": map_data.get("coord_events", []),
+        "bg_events": map_data.get("bg_events", []),
+        "landmarks": build_landmarks(map_data, rows),
         "cells": rows,
     }
 

@@ -40,6 +40,11 @@ func _run() -> void:
 		push_error("Expected six registry-backed maps, got %d." % root.map_registry.size())
 		quit(1)
 		return
+	var look: Dictionary = root.look_snapshot(4)
+	if look["nearby_landmarks"].size() < 2:
+		push_error("Expected nearby landmarks from /look at start cell.")
+		quit(1)
+		return
 	if not root.try_move(Vector2i.RIGHT):
 		push_error("Expected movement right from start to succeed.")
 		quit(1)
