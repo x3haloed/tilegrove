@@ -11,6 +11,8 @@ const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
 const PLAYER_SPRITE_PATH := "res://assets/pokeemerald/object_sprites/player.png"
 const PLAYER_FRAME_WIDTH := 16
 const PLAYER_STEP_DURATION_SECONDS := 0.16
+const OBJECT_STEP_DURATION_SECONDS := 0.32
+const OBJECT_IDLE_SECONDS := 1.0
 const PLAYER_FACE_FRAMES := {
 	"south": 0,
 	"north": 1,
@@ -48,6 +50,7 @@ var player_is_stepping := false
 var player_step_elapsed := 0.0
 var player_visual_cell_from := Vector2i(10, 15)
 var player_visual_cell_to := Vector2i(10, 15)
+var object_states: Dictionary = {}
 
 
 func _ready() -> void:
@@ -61,6 +64,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	update_player_step(delta)
+	update_object_steps(delta)
 	var movement := Vector2i.ZERO
 	if not player_is_stepping and Input.is_action_just_pressed("ui_left"):
 		movement = Vector2i.LEFT
@@ -140,6 +144,7 @@ func enter_map(map_name: String, cell: Vector2i, prefix := "entered") -> bool:
 	if not is_cell_passable(player_cell):
 		player_cell = nearest_passable_cell(player_cell)
 	reset_player_step()
+	build_object_states()
 	update_object_markers()
 	update_player_marker()
 	update_status("%s %s" % [prefix, current_map_name])
@@ -301,6 +306,131 @@ func player_visual_cell() -> Vector2:
 		return Vector2(player_cell)
 	var progress: float = clampf(player_step_elapsed / PLAYER_STEP_DURATION_SECONDS, 0.0, 1.0)
 	return Vector2(player_visual_cell_from).lerp(Vector2(player_visual_cell_to), progress)
+
+
+func build_object_states() -> void:
+	object_states = {}
+	for landmark in manifest.get("landmarks", []):
+		if str(landmark.get("kind", "")) != "object":
+			continue
+		var spawn := landmark_first_cell(landmark)
+		var state := {
+			"id": str(landmark.get("id", "")),
+			"spawn": spawn,
+			"cell": spawn,
+			"from": spawn,
+			"to": spawn,
+			"is_stepping": false,
+			"elapsed": 0.0,
+			"idle": object_idle_offset(str(landmark.get("id", ""))),
+			"direction_index": object_direction_offset(str(landmark.get("id", ""))),
+			"facing": object_facing(landmark),
+		}
+		object_states[state["id"]] = state
+
+
+func object_idle_offset(object_id: String) -> float:
+	return 0.35 + float(abs(object_id.hash()) % 5) * 0.17
+
+
+func object_direction_offset(object_id: String) -> int:
+	return abs(object_id.hash()) % 4
+
+
+func update_object_steps(delta: float) -> void:
+	for landmark in manifest.get("landmarks", []):
+		if str(landmark.get("kind", "")) != "object":
+			continue
+		var object_id := str(landmark.get("id", ""))
+		if not object_states.has(object_id):
+			continue
+		var state: Dictionary = object_states[object_id]
+		if bool(state.get("is_stepping", false)):
+			state["elapsed"] = float(state.get("elapsed", 0.0)) + delta
+			if float(state["elapsed"]) >= OBJECT_STEP_DURATION_SECONDS:
+				complete_object_step(landmark, state)
+			else:
+				update_object_marker_node(landmark, state, true)
+			continue
+		if not object_can_idle_wander(landmark):
+			continue
+		state["idle"] = float(state.get("idle", OBJECT_IDLE_SECONDS)) - delta
+		if float(state["idle"]) <= 0.0:
+			try_start_object_wander(landmark, state)
+
+
+func object_can_idle_wander(landmark: Dictionary) -> bool:
+	return str(landmark.get("movement_type", "")) == "MOVEMENT_TYPE_WANDER_AROUND"
+
+
+func try_start_object_wander(landmark: Dictionary, state: Dictionary) -> void:
+	var directions := [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
+	var start_index := int(state.get("direction_index", 0))
+	for offset in range(directions.size()):
+		var index := (start_index + offset) % directions.size()
+		var delta: Vector2i = directions[index]
+		var target: Vector2i = state["cell"] + delta
+		if object_can_step_to(landmark, state, target):
+			state["direction_index"] = (index + 1) % directions.size()
+			start_object_step(landmark, state, delta, target)
+			return
+	state["direction_index"] = (start_index + 1) % directions.size()
+	state["idle"] = OBJECT_IDLE_SECONDS
+
+
+func object_can_step_to(landmark: Dictionary, state: Dictionary, target: Vector2i) -> bool:
+	var spawn: Vector2i = state["spawn"]
+	if abs(target.x - spawn.x) > int(landmark.get("movement_range_x", 0)):
+		return false
+	if abs(target.y - spawn.y) > int(landmark.get("movement_range_y", 0)):
+		return false
+	if not is_cell_passable(target):
+		return false
+	if target == player_cell:
+		return false
+	return true
+
+
+func start_object_step(landmark: Dictionary, state: Dictionary, delta: Vector2i, target: Vector2i) -> void:
+	state["is_stepping"] = true
+	state["elapsed"] = 0.0
+	state["from"] = state["cell"]
+	state["to"] = target
+	state["facing"] = direction_name(delta)
+	update_object_marker_node(landmark, state, true)
+
+
+func complete_object_step(landmark: Dictionary, state: Dictionary) -> void:
+	state["is_stepping"] = false
+	state["elapsed"] = OBJECT_STEP_DURATION_SECONDS
+	state["cell"] = state["to"]
+	state["from"] = state["cell"]
+	state["idle"] = OBJECT_IDLE_SECONDS
+	update_object_marker_node(landmark, state, false)
+
+
+func object_visual_cell(landmark: Dictionary) -> Vector2:
+	var object_id := str(landmark.get("id", ""))
+	if not object_states.has(object_id):
+		return Vector2(landmark_first_cell(landmark))
+	var state: Dictionary = object_states[object_id]
+	if not bool(state.get("is_stepping", false)):
+		return Vector2(state["cell"])
+	var progress: float = clampf(float(state.get("elapsed", 0.0)) / OBJECT_STEP_DURATION_SECONDS, 0.0, 1.0)
+	return Vector2(state["from"]).lerp(Vector2(state["to"]), progress)
+
+
+func object_current_cell(landmark: Dictionary) -> Vector2i:
+	var object_id := str(landmark.get("id", ""))
+	if object_states.has(object_id):
+		return object_states[object_id]["cell"]
+	return landmark_first_cell(landmark)
+
+
+func landmark_first_cell(landmark: Dictionary) -> Vector2i:
+	for raw_cell in landmark.get("cells", []):
+		return Vector2i(int(raw_cell.get("x", 0)), int(raw_cell.get("y", 0)))
+	return Vector2i.ZERO
 
 
 func connection_direction(delta: Vector2i) -> String:
@@ -477,34 +607,49 @@ func update_object_markers() -> void:
 	for landmark in manifest.get("landmarks", []):
 		if str(landmark.get("kind", "")) != "object":
 			continue
-		for raw_cell in landmark.get("cells", []):
-			var cell := Vector2i(int(raw_cell.get("x", 0)), int(raw_cell.get("y", 0)))
-			var sprite_texture := object_sprite_texture(landmark)
-			if sprite_texture != null:
-				var sprite := Sprite2D.new()
-				sprite.name = str(landmark.get("id", "object"))
-				sprite.centered = false
-				sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-				sprite.texture = sprite_texture
-				sprite.hframes = object_sprite_hframes(sprite_texture)
-				sprite.vframes = 1
-				update_object_sprite_frame(sprite, landmark)
-				sprite.scale = map_sprite.scale
-				sprite.position = object_sprite_position(cell, sprite_texture)
-				object_markers.add_child(sprite)
-			else:
-				var marker := ColorRect.new()
-				marker.name = str(landmark.get("id", "object"))
-				marker.color = object_marker_color(landmark)
-				marker.size = marker_size - Vector2(inset * 2.0, inset * 2.0)
-				marker.position = map_sprite.position + Vector2(cell * TILE_SIZE) * scale_factor + Vector2(inset, inset)
-				object_markers.add_child(marker)
+		var visual_cell := object_visual_cell(landmark)
+		var sprite_texture := object_sprite_texture(landmark)
+		if sprite_texture != null:
+			var sprite := Sprite2D.new()
+			sprite.name = str(landmark.get("id", "object"))
+			sprite.centered = false
+			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			sprite.texture = sprite_texture
+			sprite.hframes = object_sprite_hframes(sprite_texture)
+			sprite.vframes = 1
+			update_object_sprite_frame(sprite, landmark, false)
+			sprite.scale = map_sprite.scale
+			sprite.position = object_sprite_position(visual_cell, sprite_texture)
+			object_markers.add_child(sprite)
+		else:
+			var marker := ColorRect.new()
+			marker.name = str(landmark.get("id", "object"))
+			marker.color = object_marker_color(landmark)
+			marker.size = marker_size - Vector2(inset * 2.0, inset * 2.0)
+			marker.position = map_sprite.position + visual_cell * TILE_SIZE * scale_factor + Vector2(inset, inset)
+			object_markers.add_child(marker)
 
 
-func object_sprite_position(cell: Vector2i, texture: Texture2D) -> Vector2:
+func update_object_marker_node(landmark: Dictionary, state: Dictionary, walking: bool) -> void:
+	var marker := object_markers.get_node_or_null(str(landmark.get("id", "")))
+	if marker == null:
+		return
+	if marker is Sprite2D:
+		var sprite := marker as Sprite2D
+		if sprite.texture != null:
+			update_object_sprite_frame(sprite, landmark, walking)
+			sprite.position = object_sprite_position(object_visual_cell(landmark), sprite.texture)
+	elif marker is ColorRect:
+		var rect := marker as ColorRect
+		var scale_factor: float = map_sprite.scale.x
+		var inset: float = maxf(3.0, 3.0 * scale_factor)
+		rect.position = map_sprite.position + object_visual_cell(landmark) * TILE_SIZE * scale_factor + Vector2(inset, inset)
+
+
+func object_sprite_position(cell: Vector2, texture: Texture2D) -> Vector2:
 	var scale_factor: float = map_sprite.scale.x
 	var source_size := Vector2(object_sprite_frame_width(texture), texture.get_height())
-	var local_position := Vector2(cell * TILE_SIZE)
+	var local_position := cell * TILE_SIZE
 	local_position.x += (TILE_SIZE - source_size.x) / 2.0
 	local_position.y += TILE_SIZE - source_size.y
 	return map_sprite.position + local_position * scale_factor
@@ -520,18 +665,31 @@ func object_sprite_frame_width(texture: Texture2D) -> int:
 	return int(texture.get_width() / object_sprite_hframes(texture))
 
 
-func update_object_sprite_frame(sprite: Sprite2D, landmark: Dictionary) -> void:
+func update_object_sprite_frame(sprite: Sprite2D, landmark: Dictionary, walking: bool) -> void:
 	if sprite.hframes <= 1:
 		return
 
 	var facing := object_facing(landmark)
 	if facing.is_empty():
 		facing = "south"
-	sprite.frame = int(PLAYER_FACE_FRAMES.get(facing, 0))
+	var frames: Array = PLAYER_WALK_FRAMES.get(facing, [])
+	if walking and not frames.is_empty():
+		var state: Dictionary = object_states.get(str(landmark.get("id", "")), {})
+		var progress: float = clampf(float(state.get("elapsed", 0.0)) / OBJECT_STEP_DURATION_SECONDS, 0.0, 0.999)
+		var frame_index := int(floor(progress * frames.size()))
+		sprite.frame = int(frames[frame_index])
+	else:
+		sprite.frame = int(PLAYER_FACE_FRAMES.get(facing, 0))
 	sprite.flip_h = facing == "east"
 
 
 func object_facing(landmark: Dictionary) -> String:
+	var object_id := str(landmark.get("id", ""))
+	if object_states.has(object_id):
+		var state_facing := str(object_states[object_id].get("facing", ""))
+		if not state_facing.is_empty():
+			return state_facing
+
 	match str(landmark.get("movement_type", "")):
 		"MOVEMENT_TYPE_FACE_DOWN", "MOVEMENT_TYPE_FACE_SOUTH":
 			return "south"
@@ -757,6 +915,10 @@ func landmarks_near(cell: Vector2i, radius: int) -> Array:
 
 
 func landmark_distance(cell: Vector2i, landmark: Dictionary) -> int:
+	if str(landmark.get("kind", "")) == "object":
+		var object_cell := object_current_cell(landmark)
+		return abs(cell.x - object_cell.x) + abs(cell.y - object_cell.y)
+
 	var best_distance := 1000000
 	for raw_cell in landmark.get("cells", []):
 		var landmark_cell := Vector2i(int(raw_cell.get("x", 0)), int(raw_cell.get("y", 0)))

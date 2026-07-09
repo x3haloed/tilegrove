@@ -86,6 +86,20 @@ func _run() -> void:
 		push_error("Expected truck sprite to remain a static single-frame object.")
 		quit(1)
 		return
+	var twin_state: Dictionary = root.object_states.get("object_0_16_10", {})
+	var twin_spawn: Vector2i = twin_state.get("spawn", Vector2i.ZERO)
+	root.update_object_steps(2.0)
+	twin_state = root.object_states.get("object_0_16_10", {})
+	if not bool(twin_state.get("is_stepping", false)):
+		push_error("Expected wandering Twin NPC to start an idle step.")
+		quit(1)
+		return
+	root.update_object_steps(0.4)
+	twin_state = root.object_states.get("object_0_16_10", {})
+	if bool(twin_state.get("is_stepping", true)) or twin_state.get("cell", twin_spawn) == twin_spawn:
+		push_error("Expected wandering Twin NPC to complete a step to a new cell.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(2, 10), "verify"):
 		push_error("Expected LittlerootTown to be loaded for non-talkable object check.")
 		quit(1)
