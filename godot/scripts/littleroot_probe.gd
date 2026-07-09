@@ -548,6 +548,7 @@ func interact_with_sign(landmark: Dictionary, distance: int) -> Dictionary:
 		"name": str(landmark.get("name", "")),
 		"distance": distance,
 		"text": sign_text_placeholder(landmark),
+		"text_symbol": str(landmark.get("text_symbol", "")),
 		"script": str(landmark.get("script", "")),
 	}
 
@@ -572,6 +573,8 @@ func interact_with_doorway(landmark: Dictionary, distance: int) -> Dictionary:
 
 
 func sign_text_placeholder(landmark: Dictionary) -> String:
+	if landmark.has("text"):
+		return str(landmark["text"])
 	var script := str(landmark.get("script", ""))
 	if script.is_empty():
 		return str(landmark.get("name", "Sign"))

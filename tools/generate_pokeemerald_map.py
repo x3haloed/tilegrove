@@ -241,7 +241,99 @@ def boundary_cells(rows: list[list[dict]], direction: str) -> list[dict]:
     return cells
 
 
-def build_landmarks(map_data: dict, rows: list[list[dict]]) -> list[dict]:
+def parse_script_blocks(source: str) -> dict[str, list[str]]:
+    blocks: dict[str, list[str]] = {}
+    current_label = ""
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.endswith(":") and not stripped.startswith("."):
+            current_label = stripped.rstrip(":")
+            blocks[current_label] = []
+            continue
+        if current_label:
+            blocks[current_label].append(line)
+    return blocks
+
+
+def first_msgbox_text_symbol(blocks: dict[str, list[str]], script_symbol: str) -> str:
+    for line in blocks.get(script_symbol, []):
+        stripped = line.strip()
+        if not stripped.startswith("msgbox "):
+            continue
+        return stripped.removeprefix("msgbox ").split(",", 1)[0].strip()
+    return ""
+
+
+def decode_string_fragment(fragment: str) -> str:
+    if "$" in fragment:
+        fragment = fragment.split("$", 1)[0]
+    return (
+        fragment
+        .replace(r"\p", "\n\n")
+        .replace(r"\l", "\n")
+        .replace(r"\n", "\n")
+        .replace(r"\"", '"')
+    )
+
+
+def text_for_symbol(blocks: dict[str, list[str]], text_symbol: str) -> str:
+    parts = []
+    for line in blocks.get(text_symbol, []):
+        stripped = line.strip()
+        if not stripped.startswith(".string "):
+            if parts:
+                break
+            continue
+        quote_start = stripped.find('"')
+        quote_end = stripped.rfind('"')
+        if quote_start == -1 or quote_end <= quote_start:
+            continue
+        fragment = stripped[quote_start + 1:quote_end]
+        parts.append(decode_string_fragment(fragment))
+        if "$" in fragment:
+            break
+    return "".join(parts).strip()
+
+
+def load_script_texts(root: Path, map_name: str) -> dict[str, dict]:
+    sources = []
+    for path in (
+        root / "data/event_scripts.s",
+        root / f"data/maps/{map_name}/scripts.inc",
+    ):
+        if path.exists():
+            sources.append(path.read_text())
+
+    blocks: dict[str, list[str]] = {}
+    for source in sources:
+        blocks.update(parse_script_blocks(source))
+
+    script_texts = {}
+    for script_symbol in blocks.keys():
+        text_symbol = first_msgbox_text_symbol(blocks, script_symbol)
+        if not text_symbol:
+            continue
+        text = text_for_symbol(blocks, text_symbol)
+        if not text:
+            continue
+        script_texts[script_symbol] = {
+            "text_symbol": text_symbol,
+            "text": text,
+        }
+    return script_texts
+
+
+def text_fields_for_script(script_texts: dict[str, dict], script: str) -> dict:
+    text_data = script_texts.get(script)
+    if not text_data:
+        return {}
+    return {
+        "text_symbol": text_data["text_symbol"],
+        "text": text_data["text"],
+    }
+
+
+def build_landmarks(map_data: dict, rows: list[list[dict]], script_texts: dict[str, dict]) -> list[dict]:
     landmarks = []
     for index, connection in enumerate(map_data.get("connections", [])):
         direction = connection.get("direction", "")
@@ -270,34 +362,41 @@ def build_landmarks(map_data: dict, rows: list[list[dict]]) -> list[dict]:
     for index, event in enumerate(map_data.get("bg_events", [])):
         event_type = event.get("type", "background")
         script = event.get("script", "")
-        landmarks.append({
+        landmark = {
             "id": f"bg_{index}_{event.get('x', 0)}_{event.get('y', 0)}",
             "kind": event_type,
             "name": f"{humanize_symbol(event_type)}: {humanize_symbol(script)}",
             "cells": [point_cell(event.get("x", 0), event.get("y", 0))],
             "script": script,
-        })
+        }
+        landmark.update(text_fields_for_script(script_texts, script))
+        landmarks.append(landmark)
 
     for index, event in enumerate(map_data.get("object_events", [])):
         graphics = event.get("graphics_id", "object")
-        landmarks.append({
+        script = event.get("script", "")
+        landmark = {
             "id": f"object_{index}_{event.get('x', 0)}_{event.get('y', 0)}",
             "kind": "object",
             "name": humanize_symbol(graphics),
             "cells": [point_cell(event.get("x", 0), event.get("y", 0))],
             "graphics_id": graphics,
-            "script": event.get("script", ""),
-        })
+            "script": script,
+        }
+        landmark.update(text_fields_for_script(script_texts, script))
+        landmarks.append(landmark)
 
     for index, event in enumerate(map_data.get("coord_events", [])):
         script = event.get("script", "")
-        landmarks.append({
+        landmark = {
             "id": f"trigger_{index}_{event.get('x', 0)}_{event.get('y', 0)}",
             "kind": "trigger",
             "name": f"Trigger: {humanize_symbol(script)}",
             "cells": [point_cell(event.get("x", 0), event.get("y", 0))],
             "script": script,
-        })
+        }
+        landmark.update(text_fields_for_script(script_texts, script))
+        landmarks.append(landmark)
 
     return landmarks
 
@@ -309,6 +408,7 @@ def build_manifest(
     primary: dict,
     secondary: dict,
     values: tuple[int, ...],
+    script_texts: dict[str, dict],
 ) -> dict:
     width = int(layout["width"])
     height = int(layout["height"])
@@ -349,7 +449,7 @@ def build_manifest(
         "warp_events": map_data.get("warp_events", []),
         "coord_events": map_data.get("coord_events", []),
         "bg_events": map_data.get("bg_events", []),
-        "landmarks": build_landmarks(map_data, rows),
+        "landmarks": build_landmarks(map_data, rows, script_texts),
         "cells": rows,
     }
 
@@ -387,7 +487,8 @@ def generate_map(
     output.save(resolved_output_path)
     print(f"Wrote {resolved_output_path} ({output.width}x{output.height})")
 
-    manifest = build_manifest(map_name, map_data, layout, primary, secondary, values)
+    script_texts = load_script_texts(pokeemerald_root, map_name)
+    manifest = build_manifest(map_name, map_data, layout, primary, secondary, values, script_texts)
     resolved_manifest_path = manifest_path or Path(f"godot/assets/pokeemerald/maps/{slug}.json")
     resolved_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     resolved_manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")

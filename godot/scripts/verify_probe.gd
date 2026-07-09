@@ -59,6 +59,10 @@ func _run() -> void:
 		push_error("Expected sign interaction to be accepted.")
 		quit(1)
 		return
+	if not str(sign_result.get("text", "")).contains("LITTLEROOT TOWN"):
+		push_error("Expected sign interaction to return extracted text.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(7, 16), "verify"):
 		push_error("Expected LittlerootTown to be loaded for doorway interaction.")
 		quit(1)
