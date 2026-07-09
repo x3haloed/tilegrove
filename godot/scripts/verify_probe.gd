@@ -76,6 +76,16 @@ func _run() -> void:
 		push_error("Expected generated object sprites on the map.")
 		quit(1)
 		return
+	var mom_sprite := object_markers.get_node_or_null("object_3_5_8") as Sprite2D
+	if mom_sprite == null or mom_sprite.hframes < 9 or mom_sprite.frame != 1:
+		push_error("Expected Mom sprite to use the north-facing frame from movement_type.")
+		quit(1)
+		return
+	var truck_sprite := object_markers.get_node_or_null("object_4_2_10") as Sprite2D
+	if truck_sprite == null or truck_sprite.hframes != 1:
+		push_error("Expected truck sprite to remain a static single-frame object.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(2, 10), "verify"):
 		push_error("Expected LittlerootTown to be loaded for non-talkable object check.")
 		quit(1)

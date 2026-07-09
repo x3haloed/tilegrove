@@ -486,6 +486,9 @@ func update_object_markers() -> void:
 				sprite.centered = false
 				sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 				sprite.texture = sprite_texture
+				sprite.hframes = object_sprite_hframes(sprite_texture)
+				sprite.vframes = 1
+				update_object_sprite_frame(sprite, landmark)
 				sprite.scale = map_sprite.scale
 				sprite.position = object_sprite_position(cell, sprite_texture)
 				object_markers.add_child(sprite)
@@ -500,11 +503,46 @@ func update_object_markers() -> void:
 
 func object_sprite_position(cell: Vector2i, texture: Texture2D) -> Vector2:
 	var scale_factor: float = map_sprite.scale.x
-	var source_size := Vector2(texture.get_width(), texture.get_height())
+	var source_size := Vector2(object_sprite_frame_width(texture), texture.get_height())
 	var local_position := Vector2(cell * TILE_SIZE)
 	local_position.x += (TILE_SIZE - source_size.x) / 2.0
 	local_position.y += TILE_SIZE - source_size.y
 	return map_sprite.position + local_position * scale_factor
+
+
+func object_sprite_hframes(texture: Texture2D) -> int:
+	if texture.get_width() == 144 and (texture.get_height() == 16 or texture.get_height() == 32):
+		return 9
+	return 1
+
+
+func object_sprite_frame_width(texture: Texture2D) -> int:
+	return int(texture.get_width() / object_sprite_hframes(texture))
+
+
+func update_object_sprite_frame(sprite: Sprite2D, landmark: Dictionary) -> void:
+	if sprite.hframes <= 1:
+		return
+
+	var facing := object_facing(landmark)
+	if facing.is_empty():
+		facing = "south"
+	sprite.frame = int(PLAYER_FACE_FRAMES.get(facing, 0))
+	sprite.flip_h = facing == "east"
+
+
+func object_facing(landmark: Dictionary) -> String:
+	match str(landmark.get("movement_type", "")):
+		"MOVEMENT_TYPE_FACE_DOWN", "MOVEMENT_TYPE_FACE_SOUTH":
+			return "south"
+		"MOVEMENT_TYPE_FACE_UP", "MOVEMENT_TYPE_FACE_NORTH":
+			return "north"
+		"MOVEMENT_TYPE_FACE_LEFT", "MOVEMENT_TYPE_FACE_WEST":
+			return "west"
+		"MOVEMENT_TYPE_FACE_RIGHT", "MOVEMENT_TYPE_FACE_EAST":
+			return "east"
+		_:
+			return ""
 
 
 func object_sprite_texture(landmark: Dictionary) -> Texture2D:

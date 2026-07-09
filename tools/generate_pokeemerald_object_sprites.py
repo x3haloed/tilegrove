@@ -84,7 +84,7 @@ def standing_frame(image: Image.Image) -> Image.Image:
 
 
 def output_image(image: Image.Image, graphics_id: str) -> Image.Image:
-    if graphics_id == "OBJ_EVENT_GFX_PLAYER":
+    if image.width == 144 and image.height in (16, 32):
         return image
     return standing_frame(image)
 

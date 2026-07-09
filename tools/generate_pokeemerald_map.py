@@ -396,6 +396,10 @@ def build_landmarks(map_data: dict, rows: list[list[dict]], script_texts: dict[s
             "name": humanize_symbol(graphics),
             "cells": [point_cell(event.get("x", 0), event.get("y", 0))],
             "graphics_id": graphics,
+            "movement_type": event.get("movement_type", ""),
+            "movement_range_x": int(event.get("movement_range_x", 0)),
+            "movement_range_y": int(event.get("movement_range_y", 0)),
+            "elevation": int(event.get("elevation", 0)),
             "script": script,
         }
         landmark.update(text_fields_for_script(script_texts, script))
