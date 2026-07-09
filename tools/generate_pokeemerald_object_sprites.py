@@ -83,6 +83,12 @@ def standing_frame(image: Image.Image) -> Image.Image:
     return image.crop((0, 0, frame_width, image.height))
 
 
+def output_image(image: Image.Image, graphics_id: str) -> Image.Image:
+    if graphics_id == "OBJ_EVENT_GFX_PLAYER":
+        return image
+    return standing_frame(image)
+
+
 def generate_sprite(root: Path, output_dir: Path, graphics_id: str) -> Path | None:
     source = source_for_graphics_id(root, graphics_id)
     if source is None:
@@ -90,7 +96,7 @@ def generate_sprite(root: Path, output_dir: Path, graphics_id: str) -> Path | No
         return None
 
     image = Image.open(source)
-    output = transparent_rgba(standing_frame(image))
+    output = transparent_rgba(output_image(image, graphics_id))
     output_path = output_dir / f"{graphics_slug(graphics_id)}.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.save(output_path)

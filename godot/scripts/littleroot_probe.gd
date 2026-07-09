@@ -9,6 +9,19 @@ const CONTROL_HTTP_MAX_REQUEST_BYTES := 65536
 const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
 const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
 const PLAYER_SPRITE_PATH := "res://assets/pokeemerald/object_sprites/player.png"
+const PLAYER_FRAME_WIDTH := 16
+const PLAYER_FACE_FRAMES := {
+	"south": 0,
+	"north": 1,
+	"west": 2,
+	"east": 2,
+}
+const PLAYER_WALK_FRAMES := {
+	"south": [3, 0, 4, 0],
+	"north": [5, 1, 6, 1],
+	"west": [7, 2, 8, 2],
+	"east": [7, 2, 8, 2],
+}
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
 @onready var object_markers: Node2D = $ObjectMarkers
@@ -29,6 +42,8 @@ var control_connections: Array[Dictionary] = []
 var control_http_port := 0
 var control_http_status := "control endpoint stopped"
 var interact_key_was_down := false
+var player_facing := "south"
+var player_walk_phase := 0
 
 
 func _ready() -> void:
@@ -54,7 +69,7 @@ func _process(_delta: float) -> void:
 	if movement != Vector2i.ZERO:
 		try_move(movement)
 	if interact_pressed():
-		perform_nearest_interaction()
+		perform_facing_interaction()
 	poll_control_http()
 
 
@@ -148,21 +163,34 @@ func load_player_sprite() -> void:
 		player_marker.visible = true
 		return
 	player_sprite.texture = texture
+	player_sprite.hframes = int(max(1, texture.get_width() / PLAYER_FRAME_WIDTH))
+	player_sprite.vframes = 1
 	player_sprite.visible = true
 	player_marker.visible = false
+	update_player_sprite_frame(false)
 
 
 func try_move(delta: Vector2i) -> bool:
+	set_player_facing_from_delta(delta)
 	var target := player_cell + delta
 	if is_cell_passable(target):
 		player_cell = target
+		player_walk_phase += 1
 		update_player_marker()
+		update_player_sprite_frame(true)
 		update_status("moved to %s" % cell_text(player_cell))
 		return true
 
 	if not is_cell_in_bounds(target):
-		return try_cross_connection(delta, target)
+		var crossed := try_cross_connection(delta, target)
+		if crossed:
+			player_walk_phase += 1
+			update_player_sprite_frame(true)
+		else:
+			update_player_sprite_frame(false)
+		return crossed
 
+	update_player_sprite_frame(false)
 	update_status("blocked at %s" % cell_text(target))
 	return false
 
@@ -200,6 +228,29 @@ func direction_delta(direction: String) -> Vector2i:
 			return Vector2i.RIGHT
 		_:
 			return Vector2i.ZERO
+
+
+func set_player_facing_from_delta(delta: Vector2i) -> void:
+	var direction := direction_name(delta)
+	if not direction.is_empty():
+		player_facing = direction
+		update_player_sprite_frame(false)
+
+
+func direction_name(delta: Vector2i) -> String:
+	if delta == Vector2i.UP:
+		return "north"
+	if delta == Vector2i.DOWN:
+		return "south"
+	if delta == Vector2i.LEFT:
+		return "west"
+	if delta == Vector2i.RIGHT:
+		return "east"
+	return ""
+
+
+func facing_delta() -> Vector2i:
+	return direction_delta(player_facing)
 
 
 func connection_direction(delta: Vector2i) -> String:
@@ -338,7 +389,30 @@ func update_player_marker() -> void:
 	player_marker.position = map_sprite.position + Vector2(player_cell * TILE_SIZE) * scale_factor
 	if player_sprite.texture != null:
 		player_sprite.scale = map_sprite.scale
-		player_sprite.position = object_sprite_position(player_cell, player_sprite.texture)
+		player_sprite.position = player_sprite_position()
+
+
+func update_player_sprite_frame(walking: bool) -> void:
+	if player_sprite == null or player_sprite.texture == null:
+		return
+
+	var frames: Array = PLAYER_WALK_FRAMES.get(player_facing, [])
+	if walking and not frames.is_empty():
+		player_sprite.frame = int(frames[player_walk_phase % frames.size()])
+	else:
+		player_sprite.frame = int(PLAYER_FACE_FRAMES.get(player_facing, 0))
+	player_sprite.flip_h = player_facing == "east"
+
+
+func player_sprite_position() -> Vector2:
+	if player_sprite.texture == null:
+		return Vector2.ZERO
+	var scale_factor: float = map_sprite.scale.x
+	var source_size := Vector2(PLAYER_FRAME_WIDTH, player_sprite.texture.get_height())
+	var local_position := Vector2(player_cell * TILE_SIZE)
+	local_position.x += (TILE_SIZE - source_size.x) / 2.0
+	local_position.y += TILE_SIZE - source_size.y
+	return map_sprite.position + local_position * scale_factor
 
 
 func update_object_markers() -> void:
@@ -466,6 +540,8 @@ func state_snapshot() -> Dictionary:
 			"height": int(manifest.get("height", 0)),
 		},
 		"cell": cell_to_dict(player_cell),
+		"facing": player_facing,
+		"facing_cell": cell_to_dict(player_cell + facing_delta()),
 		"collision": int(cell.get("collision", -1)),
 		"elevation": int(cell.get("elevation", -1)),
 		"metatile_id": int(cell.get("metatile_id", -1)),
@@ -611,6 +687,7 @@ func available_interactions(range := 1) -> Array:
 			"action": action,
 			"name": str(landmark.get("name", "")),
 			"distance": distance,
+			"in_front": landmark_distance(player_cell + facing_delta(), landmark) == 0,
 		})
 	return interactions
 
@@ -629,6 +706,23 @@ func nearest_interaction() -> Dictionary:
 			nearest_distance = distance
 			nearest = interaction
 	return nearest
+
+
+func facing_interaction() -> Dictionary:
+	for interaction in available_interactions():
+		if bool(interaction.get("in_front", false)):
+			return interaction
+	return {}
+
+
+func perform_facing_interaction() -> Dictionary:
+	var front := facing_interaction()
+	if front.is_empty():
+		return perform_nearest_interaction()
+
+	var result := interact_with_target(str(front.get("target_id", "")))
+	show_interaction_result(result)
+	return result
 
 
 func perform_nearest_interaction() -> Dictionary:

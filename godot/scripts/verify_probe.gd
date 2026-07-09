@@ -41,6 +41,14 @@ func _run() -> void:
 		push_error("Expected debug player marker to be hidden when sprite is loaded.")
 		quit(1)
 		return
+	if player_sprite.hframes < 9:
+		push_error("Expected generated player walking sheet to expose nine frames.")
+		quit(1)
+		return
+	if player_sprite.frame != 0 or player_sprite.flip_h:
+		push_error("Expected player to start facing south on the standing frame.")
+		quit(1)
+		return
 
 	if not root.is_cell_passable(Vector2i(10, 15)):
 		push_error("Expected start cell to be passable.")
@@ -153,12 +161,29 @@ func _run() -> void:
 		push_error("Expected movement right from start to succeed.")
 		quit(1)
 		return
+	var east_state: Dictionary = root.state_snapshot()
+	if str(east_state.get("facing", "")) != "east" or not player_sprite.flip_h:
+		push_error("Expected right movement to face east and flip the player sprite.")
+		quit(1)
+		return
+	if player_sprite.frame == 0:
+		push_error("Expected right movement to advance to a walking frame.")
+		quit(1)
+		return
 	if not root.try_move(Vector2i.LEFT):
 		push_error("Expected movement left back to start to succeed.")
 		quit(1)
 		return
+	if str(root.state_snapshot().get("facing", "")) != "west" or player_sprite.flip_h:
+		push_error("Expected left movement to face west without horizontal flip.")
+		quit(1)
+		return
 	if root.try_move(Vector2i.LEFT):
 		push_error("Expected movement into blocked cell to fail.")
+		quit(1)
+		return
+	if player_sprite.frame != 2:
+		push_error("Expected blocked west movement to settle on the west-facing frame.")
 		quit(1)
 		return
 	print("movement gate: passable move accepted, blocked move rejected")
