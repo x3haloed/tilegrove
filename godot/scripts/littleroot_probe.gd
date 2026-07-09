@@ -13,6 +13,7 @@ const PLAYER_FRAME_WIDTH := 16
 const PLAYER_STEP_DURATION_SECONDS := 0.16
 const OBJECT_STEP_DURATION_SECONDS := 0.32
 const OBJECT_IDLE_SECONDS := 1.0
+const SSE_NPC_MOTION_SECONDS := 3.0
 const SSE_AMBIENT_SECONDS := 10.0
 const SSE_SILENCE_SECONDS := 3600.0
 const PLAYER_FACE_FRAMES := {
@@ -54,6 +55,8 @@ var player_visual_cell_from := Vector2i(10, 15)
 var player_visual_cell_to := Vector2i(10, 15)
 var object_states: Dictionary = {}
 var sse_connections: Array[Dictionary] = []
+var sse_npc_motion_buffer: Array[Dictionary] = []
+var sse_npc_motion_elapsed := 0.0
 var sse_ambient_elapsed := 0.0
 var sse_silence_elapsed := 0.0
 
@@ -417,7 +420,7 @@ func complete_object_step(landmark: Dictionary, state: Dictionary) -> void:
 	state["from"] = state["cell"]
 	state["idle"] = OBJECT_IDLE_SECONDS
 	update_object_marker_node(landmark, state, false)
-	emit_sse_event("npc_moved", stream_npc_moved_details(landmark, origin, destination, str(state.get("facing", ""))))
+	queue_npc_motion(landmark, origin, destination, str(state.get("facing", "")))
 
 
 func object_visual_cell(landmark: Dictionary) -> Vector2:
@@ -769,6 +772,10 @@ func cell_text(cell: Vector2i) -> String:
 
 func cell_to_dict(cell: Vector2i) -> Dictionary:
 	return {"x": cell.x, "y": cell.y}
+
+
+func dict_to_cell(data: Dictionary) -> Vector2i:
+	return Vector2i(int(data.get("x", 0)), int(data.get("y", 0)))
 
 
 func state_snapshot() -> Dictionary:
@@ -1435,9 +1442,16 @@ func process_sse(delta: float) -> void:
 		sse_connections.erase(connection)
 
 	if sse_connections.is_empty():
+		sse_npc_motion_buffer = []
+		sse_npc_motion_elapsed = 0.0
 		sse_ambient_elapsed = 0.0
 		sse_silence_elapsed = 0.0
 		return
+
+	if not sse_npc_motion_buffer.is_empty():
+		sse_npc_motion_elapsed += delta
+		if sse_npc_motion_elapsed >= SSE_NPC_MOTION_SECONDS:
+			flush_npc_motion()
 
 	sse_ambient_elapsed += delta
 	sse_silence_elapsed += delta
@@ -1453,10 +1467,27 @@ func process_sse(delta: float) -> void:
 		})
 
 
+func queue_npc_motion(landmark: Dictionary, origin: Vector2i, destination: Vector2i, facing: String) -> void:
+	if sse_connections.is_empty():
+		return
+	sse_npc_motion_buffer.append(stream_npc_move_details(landmark, origin, destination, facing))
+	if sse_npc_motion_buffer.size() >= 12:
+		flush_npc_motion()
+
+
+func flush_npc_motion() -> void:
+	if sse_npc_motion_buffer.is_empty():
+		return
+	var moves := sse_npc_motion_buffer.duplicate(true)
+	sse_npc_motion_buffer = []
+	sse_npc_motion_elapsed = 0.0
+	emit_sse_event("npc_motion", stream_npc_motion_details(moves))
+
+
 func emit_sse_event(kind: String, details: Dictionary) -> void:
 	if sse_connections.is_empty():
 		return
-	if kind != "ambient_status" and kind != "silence":
+	if kind != "ambient_status" and kind != "silence" and kind != "npc_motion":
 		sse_silence_elapsed = 0.0
 	var closed: Array[Dictionary] = []
 	for connection in sse_connections:
@@ -1530,16 +1561,9 @@ func stream_player_moved_details(origin: Vector2i, destination: Vector2i) -> Dic
 	}
 
 
-func stream_npc_moved_details(landmark: Dictionary, origin: Vector2i, destination: Vector2i, facing: String) -> Dictionary:
+func stream_npc_move_details(landmark: Dictionary, origin: Vector2i, destination: Vector2i, facing: String) -> Dictionary:
 	var name := str(landmark.get("name", "Object"))
 	return {
-		"summary": "%s wandered %s from %s to %s on %s." % [
-			name,
-			facing,
-			cell_text(origin),
-			cell_text(destination),
-			current_map_name,
-		],
 		"map": current_map_name,
 		"target_id": str(landmark.get("id", "")),
 		"name": name,
@@ -1550,6 +1574,29 @@ func stream_npc_moved_details(landmark: Dictionary, origin: Vector2i, destinatio
 			"duration": OBJECT_STEP_DURATION_SECONDS,
 			"visual_tween": true,
 		},
+	}
+
+
+func stream_npc_motion_details(moves: Array) -> Dictionary:
+	var snippets := PackedStringArray()
+	for move in moves.slice(0, 4):
+		snippets.append("%s %s to %s" % [
+			str(move.get("name", "Object")),
+			str(move.get("facing", "moved")),
+			cell_text(dict_to_cell(move.get("to_cell", {}))),
+		])
+	var extra_count: int = maxi(0, moves.size() - snippets.size())
+	var summary := "%d NPC movements: %s" % [moves.size(), ", ".join(snippets)]
+	if extra_count > 0:
+		summary += ", and %d more" % extra_count
+	summary += "."
+	return {
+		"summary": summary,
+		"map": current_map_name,
+		"count": moves.size(),
+		"sample_count": mini(6, moves.size()),
+		"omitted_count": maxi(0, moves.size() - 6),
+		"sample_moves": moves.slice(0, 6),
 	}
 
 

@@ -54,6 +54,19 @@ func _run() -> void:
 		push_error("Expected SSE helper to format compact data events.")
 		quit(1)
 		return
+	var sample_npc_moves := []
+	for index in range(7):
+		sample_npc_moves.append(root.stream_npc_move_details(
+			{"id": "object_test_%d" % index, "name": "NPC %d" % index},
+			Vector2i(index, 0),
+			Vector2i(index, 1),
+			"south"
+		))
+	var npc_motion_details: Dictionary = root.stream_npc_motion_details(sample_npc_moves)
+	if int(npc_motion_details.get("count", 0)) != 7 or int(npc_motion_details.get("sample_count", 0)) != 6 or int(npc_motion_details.get("omitted_count", 0)) != 1:
+		push_error("Expected NPC motion SSE details to summarize batched motion with a bounded sample.")
+		quit(1)
+		return
 	var stream_opening: String = await read_stream_opening(root)
 	if not stream_opening.contains("Content-Type: text/event-stream") or not stream_opening.contains("\"kind\":\"hello\""):
 		push_error("Expected GET /stream to open an SSE response with a hello event.")
