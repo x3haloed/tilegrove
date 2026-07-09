@@ -45,6 +45,34 @@ func _run() -> void:
 		push_error("Expected nearby landmarks from /look at start cell.")
 		quit(1)
 		return
+	if not root.enter_map("LittlerootTown", Vector2i(15, 13), "verify"):
+		push_error("Expected LittlerootTown to be loaded for sign interaction.")
+		quit(1)
+		return
+	var sign_interactions: Array = root.available_interactions()
+	if sign_interactions.is_empty():
+		push_error("Expected a sign interaction at Littleroot town sign.")
+		quit(1)
+		return
+	var sign_result: Dictionary = root.interact_with_target(sign_interactions[0]["target_id"])
+	if not bool(sign_result.get("accepted", false)) or str(sign_result.get("kind", "")) != "sign":
+		push_error("Expected sign interaction to be accepted.")
+		quit(1)
+		return
+	if not root.enter_map("LittlerootTown", Vector2i(7, 16), "verify"):
+		push_error("Expected LittlerootTown to be loaded for doorway interaction.")
+		quit(1)
+		return
+	var doorway_result: Dictionary = root.interact_with_target("warp_2_7_16")
+	if not bool(doorway_result.get("accepted", false)) or str(doorway_result.get("kind", "")) != "doorway":
+		push_error("Expected doorway interaction to be accepted.")
+		quit(1)
+		return
+	if not root.enter_map("LittlerootTown", Vector2i(10, 15), "verify"):
+		push_error("Expected LittlerootTown to be loaded before movement checks.")
+		quit(1)
+		return
+	print("interaction gate: sign and doorway interactions accepted")
 	if not root.try_move(Vector2i.RIGHT):
 		push_error("Expected movement right from start to succeed.")
 		quit(1)

@@ -366,6 +366,7 @@ func state_snapshot() -> Dictionary:
 		"connections": connection_summaries(),
 		"warps_here": warps_at_cell(player_cell),
 		"place": place_snapshot(),
+		"available_interactions": available_interactions(),
 		"nearby_semantic_cells": nearby_semantic_cells(),
 		"control": {
 			"host": CONTROL_HTTP_HOST,
@@ -453,6 +454,7 @@ func look_snapshot(radius := 4) -> Dictionary:
 		"cell_data": cell_data(player_cell),
 		"here": landmarks_near(player_cell, 0),
 		"nearby_landmarks": landmarks_near(player_cell, radius),
+		"available_interactions": available_interactions(),
 		"connections": connection_summaries(),
 		"warps_here": warps_at_cell(player_cell),
 	}
@@ -477,6 +479,110 @@ func landmark_distance(cell: Vector2i, landmark: Dictionary) -> int:
 		if distance < best_distance:
 			best_distance = distance
 	return best_distance
+
+
+func available_interactions(range := 1) -> Array:
+	var interactions := []
+	for landmark in manifest.get("landmarks", []):
+		var distance := landmark_distance(player_cell, landmark)
+		if distance > range:
+			continue
+		var kind := str(landmark.get("kind", ""))
+		if kind != "sign" and kind != "doorway":
+			continue
+		interactions.append({
+			"target_id": str(landmark.get("id", "")),
+			"kind": kind,
+			"action": "read" if kind == "sign" else "enter",
+			"name": str(landmark.get("name", "")),
+			"distance": distance,
+		})
+	return interactions
+
+
+func interact_with_target(target_id: String) -> Dictionary:
+	var landmark := find_landmark(target_id)
+	if landmark.is_empty():
+		return {
+			"ok": false,
+			"accepted": false,
+			"message": "Unknown interaction target: %s" % target_id,
+			"available_interactions": available_interactions(),
+		}
+
+	var distance := landmark_distance(player_cell, landmark)
+	if distance > 1:
+		return {
+			"ok": true,
+			"accepted": false,
+			"target_id": target_id,
+			"message": "Target is too far away.",
+			"distance": distance,
+			"available_interactions": available_interactions(),
+		}
+
+	var kind := str(landmark.get("kind", ""))
+	match kind:
+		"sign":
+			return interact_with_sign(landmark, distance)
+		"doorway":
+			return interact_with_doorway(landmark, distance)
+		_:
+			return {
+				"ok": true,
+				"accepted": false,
+				"target_id": target_id,
+				"kind": kind,
+				"message": "Target is not interactive yet.",
+				"distance": distance,
+			}
+
+
+func interact_with_sign(landmark: Dictionary, distance: int) -> Dictionary:
+	return {
+		"ok": true,
+		"accepted": true,
+		"target_id": str(landmark.get("id", "")),
+		"kind": "sign",
+		"action": "read",
+		"name": str(landmark.get("name", "")),
+		"distance": distance,
+		"text": sign_text_placeholder(landmark),
+		"script": str(landmark.get("script", "")),
+	}
+
+
+func interact_with_doorway(landmark: Dictionary, distance: int) -> Dictionary:
+	var raw_target := str(landmark.get("target_map_raw", ""))
+	var target_map := map_constant_to_world_name(raw_target)
+	return {
+		"ok": true,
+		"accepted": true,
+		"target_id": str(landmark.get("id", "")),
+		"kind": "doorway",
+		"action": "enter",
+		"name": str(landmark.get("name", "")),
+		"distance": distance,
+		"target_map_raw": raw_target,
+		"target_map": target_map,
+		"target_loaded": not target_map.is_empty() and manifests.has(target_map),
+		"result_type": "doorway_target_loaded" if not target_map.is_empty() and manifests.has(target_map) else "doorway_target_unloaded",
+		"message": "Doorway target is not loaded yet." if target_map.is_empty() or not manifests.has(target_map) else "Doorway target is loaded, but warp entry is not implemented yet.",
+	}
+
+
+func sign_text_placeholder(landmark: Dictionary) -> String:
+	var script := str(landmark.get("script", ""))
+	if script.is_empty():
+		return str(landmark.get("name", "Sign"))
+	return "Sign script: %s" % script
+
+
+func find_landmark(target_id: String) -> Dictionary:
+	for landmark in manifest.get("landmarks", []):
+		if str(landmark.get("id", "")) == target_id:
+			return landmark
+	return {}
 
 
 func warps_at_cell(cell: Vector2i) -> Array:
@@ -617,6 +723,8 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 					"GET /state": "Return current player cell and blocked/passable directions.",
 					"GET /maps": "Return loaded world maps and their connection summaries.",
 					"GET /look": "Return landmarks, exits, and semantic map features near the player.",
+					"GET /interactions": "Return sign and doorway interactions currently in range.",
+					"POST /interact": "Interact with JSON body like {\"target_id\":\"sign_0_15_13\"}.",
 					"POST /move": "Move with JSON body like {\"direction\":\"east\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
 				},
@@ -636,6 +744,21 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 				send_control_json(peer, 405, {"ok": false, "message": "Use GET /look."})
 			else:
 				send_control_json(peer, 200, look_snapshot(int(query.get("radius", 4))))
+		"/interactions":
+			if method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use GET /interactions."})
+			else:
+				send_control_json(peer, 200, {
+					"ok": true,
+					"map": current_map_name,
+					"cell": cell_to_dict(player_cell),
+					"available_interactions": available_interactions(),
+				})
+		"/interact":
+			if method != "POST" and method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use POST /interact or GET /interact?target_id=..."})
+			else:
+				send_control_json(peer, 200, control_interact(request["body"], query))
 		"/state":
 			if method != "GET":
 				send_control_json(peer, 405, {"ok": false, "message": "Use GET /state."})
@@ -649,6 +772,8 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 		_:
 			if path.begins_with("/move/"):
 				send_control_json(peer, 200, move_direction(path.trim_prefix("/move/")))
+			elif path.begins_with("/interact/"):
+				send_control_json(peer, 200, interact_with_target(path.trim_prefix("/interact/")))
 			else:
 				send_control_json(peer, 404, {"ok": false, "message": "Unknown Tilegrove control endpoint. Try GET /help."})
 
@@ -668,6 +793,23 @@ func control_move(body: String, query: Dictionary) -> Dictionary:
 			"state": state_snapshot(),
 		}
 	return move_direction(direction)
+
+
+func control_interact(body: String, query: Dictionary) -> Dictionary:
+	var target_id := str(query.get("target_id", query.get("target", "")))
+	if target_id.is_empty() and not body.strip_edges().is_empty():
+		var parsed := parse_json_body(body)
+		if not bool(parsed.get("ok", true)):
+			return parsed
+		target_id = str(parsed.get("target_id", parsed.get("target", "")))
+	if target_id.is_empty():
+		return {
+			"ok": false,
+			"accepted": false,
+			"message": "Missing target_id.",
+			"available_interactions": available_interactions(),
+		}
+	return interact_with_target(target_id)
 
 
 func parse_json_body(body: String) -> Dictionary:
