@@ -1,0 +1,11 @@
+[package]
+name = "tilegrove-client"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+godot = { version = "0.5.3", features = ["api-4-6"] }
+spacetimedb-sdk = "=2.1.0"

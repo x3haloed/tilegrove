@@ -1,0 +1,66 @@
+# Tilegrove
+
+Tilegrove is a small shared, agent-legible Pokémon-map world built with Godot, Rust, and SpacetimeDB.
+
+## Architecture
+
+- rust/server is the authoritative SpacetimeDB module. It owns player identities and positions, validates movement against seeded map collision/connections, resolves doorway transitions, and advances deterministic NPC state on a scheduled tick.
+- rust/client is the Godot GDExtension client. It stores profile-specific credentials, calls reducers, subscribes to public tables, and exposes replicated state to GDScript.
+- godot remains every human or agent participant's body. It owns input, rendering, animation, screenshots, and the semantic loopback HTTP/SSE interface.
+- rust/xtask is the repeatable development workflow. Generated SpacetimeDB Rust bindings live in rust/client/generated and must not be edited by hand.
+
+The participant-facing flow is:
+
+    human or agent
+      -> Godot input / loopback HTTP
+      -> SpacetimeDB reducer
+      -> authoritative table update
+      -> Godot subscription cache
+      -> scene, semantic SSE, and screenshot
+
+## Local workflow
+
+Generate the local Pokémon-derived assets first:
+
+    python3 tools/generate_pokeemerald_assets.py
+
+Then use the repository task runner:
+
+    cargo xtask doctor
+    cargo xtask db start
+
+In another terminal:
+
+    cargo xtask db publish
+    cargo xtask db generate
+    cargo xtask client build
+    cargo xtask godot run
+
+cargo xtask dev performs publish, binding generation, client build, and Godot launch when the local server is already running.
+
+Verification:
+
+    cargo xtask verify
+    cargo xtask smoke two-clients
+
+The first command preserves the existing offline gameplay regression suite. The smoke command creates a clean local database, launches two headless Godot clients with separate identities, moves both through authoritative reducers, and verifies players, positions, map authority, and NPC state.
+
+## Godot participant interface
+
+The loopback port defaults to 38473 and scans upward if occupied. Override it with TILEGROVE_CONTROL_PORT.
+
+- GET /state — situated semantic state, visible players, and authority health
+- GET /look — nearby landmarks and interactions
+- POST /move — request an authoritative move
+- POST /interact — interact through the participant's Godot client
+- GET /stream — semantic SSE projection
+- GET /screenshot — current Godot viewport as PNG (GUI renderer required)
+
+Profiles use separate durable SpacetimeDB credentials:
+
+    TILEGROVE_PROFILE=agent-thimble \
+    TILEGROVE_PLAYER_NAME=Thimble \
+    TILEGROVE_CONTROL_PORT=38474 \
+    cargo xtask godot run
+
+Locally generated Pokémon-derived map and sprite assets remain ignored and are never published by this repository.

@@ -1,6 +1,7 @@
 extends SceneTree
 
 func _init() -> void:
+	OS.set_environment("TILEGROVE_OFFLINE_VERIFY", "1")
 	call_deferred("_run")
 
 

@@ -31,6 +31,7 @@ const PLAYER_WALK_FRAMES := {
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
 @onready var object_markers: Node2D = $ObjectMarkers
+@onready var other_players: Node2D = $OtherPlayers
 @onready var player_sprite: Sprite2D = $PlayerSprite
 @onready var player_marker: ColorRect = $PlayerMarker
 @onready var status_label: Label = $StatusLabel
@@ -40,6 +41,7 @@ const PLAYER_WALK_FRAMES := {
 var world_registry: Dictionary = {}
 var map_registry: Dictionary = {}
 var manifests: Dictionary = {}
+var manifest_jsons: Dictionary = {}
 var current_map_name := "LittlerootTown"
 var manifest: Dictionary = {}
 var player_cell := Vector2i(10, 15)
@@ -59,10 +61,19 @@ var sse_npc_motion_buffer: Array[Dictionary] = []
 var sse_npc_motion_elapsed := 0.0
 var sse_ambient_elapsed := 0.0
 var sse_silence_elapsed := 0.0
+var spacetime = null
+var spacetime_enabled := false
+var spacetime_join_sent := false
+var spacetime_ready := false
+var spacetime_seed_queue: Array[String] = []
+var spacetime_revision := -1
+var smoke_move_sent := false
+var smoke_start_revision := -1
 
 
 func _ready() -> void:
 	load_world_manifests()
+	start_spacetime()
 	load_player_sprite()
 	enter_map(current_map_name, player_cell, "ready")
 	start_control_http()
@@ -71,8 +82,12 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	process_spacetime()
 	update_player_step(delta)
-	update_object_steps(delta)
+	if not spacetime_enabled:
+		update_object_steps(delta)
+	else:
+		update_authoritative_object_steps(delta)
 	var movement := Vector2i.ZERO
 	if not player_is_stepping and Input.is_action_just_pressed("ui_left"):
 		movement = Vector2i.LEFT
@@ -109,12 +124,153 @@ func load_world_manifests() -> void:
 			continue
 
 		var json := JSON.new()
-		var error := json.parse(file.get_as_text())
+		var manifest_text := file.get_as_text()
+		var error := json.parse(manifest_text)
 		if error != OK:
 			push_error("Could not parse map manifest %s: %s" % [manifest_path, json.get_error_message()])
 			continue
 
 		manifests[map_name] = json.get_data()
+		manifest_jsons[map_name] = manifest_text
+
+
+func start_spacetime() -> void:
+	if OS.get_environment("TILEGROVE_OFFLINE_VERIFY") == "1":
+		return
+	if not ClassDB.class_exists("TilegroveBridge"):
+		push_error("TilegroveBridge is unavailable; build the Rust client extension.")
+		return
+	spacetime = TilegroveBridge.new()
+	var profile := OS.get_environment("TILEGROVE_PROFILE")
+	if profile.strip_edges().is_empty():
+		profile = "human"
+	spacetime_enabled = spacetime.connect_local(profile)
+	if not spacetime_enabled:
+		push_error("Could not connect to Tilegrove authority: %s" % spacetime.last_error())
+
+
+func process_spacetime() -> void:
+	if not spacetime_enabled or spacetime == null:
+		return
+	spacetime.poll()
+	if not spacetime.is_connected():
+		spacetime_ready = false
+		return
+	if not spacetime_join_sent:
+		var display_name := OS.get_environment("TILEGROVE_PLAYER_NAME")
+		if display_name.strip_edges().is_empty():
+			display_name = "Player"
+		spacetime_join_sent = spacetime.join_world(display_name)
+		return
+
+	var server_position: Dictionary = spacetime.local_position()
+	if server_position.is_empty():
+		return
+	if spacetime_seed_queue.is_empty() and spacetime.world_map_count() < map_registry.size():
+		for map_name in map_registry.keys():
+			spacetime_seed_queue.append(str(map_name))
+	if not spacetime_seed_queue.is_empty():
+		var map_name: String = spacetime_seed_queue.pop_front()
+		var config: Dictionary = map_registry[map_name]
+		if not spacetime.seed_world_map(map_name, str(config.get("constant", "")), str(manifest_jsons.get(map_name, ""))):
+			push_error("Could not seed %s: %s" % [map_name, spacetime.last_error()])
+			spacetime_seed_queue.push_front(map_name)
+		return
+	if spacetime.world_map_count() < map_registry.size():
+		return
+	spacetime_ready = true
+	apply_spacetime_position(server_position)
+	apply_spacetime_npcs()
+	update_other_players()
+	process_smoke_client()
+
+
+func process_smoke_client() -> void:
+	if OS.get_environment("TILEGROVE_SMOKE") != "1":
+		return
+	if not smoke_move_sent:
+		smoke_start_revision = spacetime_revision
+		smoke_move_sent = bool(spacetime.move_player(OS.get_environment("TILEGROVE_SMOKE_DIRECTION")))
+		return
+	if spacetime_revision > smoke_start_revision:
+		get_tree().quit(0)
+
+
+func apply_spacetime_position(server_position: Dictionary) -> void:
+	var revision := int(server_position.get("revision", -1))
+	if revision == spacetime_revision:
+		return
+	var target_map := str(server_position.get("map", current_map_name))
+	var target_cell := Vector2i(int(server_position.get("x", player_cell.x)), int(server_position.get("y", player_cell.y)))
+	var target_facing := str(server_position.get("facing", player_facing))
+	var origin_map := current_map_name
+	var origin_cell := player_cell
+	player_facing = target_facing
+	if target_map != current_map_name:
+		enter_map(target_map, target_cell, "authority moved to")
+	elif target_cell != player_cell:
+		player_cell = target_cell
+		start_player_step(origin_cell, target_cell)
+		update_status("moved to %s" % cell_text(player_cell))
+		emit_sse_event("player_moved", stream_player_moved_details(origin_cell, target_cell))
+	else:
+		update_player_sprite_frame(false)
+	spacetime_revision = revision
+	if origin_map != current_map_name:
+		update_status("entered %s" % current_map_name)
+
+
+func apply_spacetime_npcs() -> void:
+	for server_npc in spacetime.npcs_on_map(current_map_name):
+		var object_id := str(server_npc.get("id", ""))
+		if not object_states.has(object_id):
+			continue
+		var state: Dictionary = object_states[object_id]
+		var revision := int(server_npc.get("revision", 0))
+		if revision == int(state.get("server_revision", -1)):
+			continue
+		var origin: Vector2i = state.get("cell", Vector2i.ZERO)
+		var target := Vector2i(int(server_npc.get("x", origin.x)), int(server_npc.get("y", origin.y)))
+		state["server_revision"] = revision
+		state["facing"] = str(server_npc.get("facing", state.get("facing", "south")))
+		if target != origin:
+			state["from"] = origin
+			state["to"] = target
+			state["cell"] = target
+			state["elapsed"] = 0.0
+			state["is_stepping"] = true
+			var landmark := find_landmark(object_id)
+			if not landmark.is_empty():
+				update_object_marker_node(landmark, state, true)
+		else:
+			var landmark := find_landmark(object_id)
+			if not landmark.is_empty():
+				update_object_marker_node(landmark, state, false)
+
+
+func update_other_players() -> void:
+	for child in other_players.get_children():
+		child.free()
+	var local_identity := str(spacetime.local_identity())
+	for player in spacetime.players():
+		if str(player.get("identity", "")) == local_identity or str(player.get("map", "")) != current_map_name:
+			continue
+		var cell := Vector2(int(player.get("x", 0)), int(player.get("y", 0)))
+		if player_sprite.texture != null:
+			var sprite := Sprite2D.new()
+			sprite.name = "Player_%s" % str(player.get("identity", "")).substr(0, 8)
+			sprite.centered = false
+			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			sprite.texture = player_sprite.texture
+			sprite.hframes = player_sprite.hframes
+			sprite.vframes = 1
+			var facing := str(player.get("facing", "south"))
+			sprite.frame = int(PLAYER_FACE_FRAMES.get(facing, 0))
+			sprite.flip_h = facing == "east"
+			sprite.modulate = Color(0.68, 0.88, 1.0)
+			sprite.scale = map_sprite.scale
+			sprite.position = object_sprite_position(cell, sprite.texture)
+			other_players.add_child(sprite)
 
 
 func load_world_registry() -> void:
@@ -196,6 +352,17 @@ func try_move(delta: Vector2i) -> bool:
 		update_status("moving to %s" % cell_text(player_visual_cell_to))
 		return false
 
+	if spacetime_enabled:
+		if not spacetime_ready:
+			update_status("waiting for world authority")
+			return false
+		var direction := direction_name(delta)
+		var requested: bool = bool(spacetime.move_player(direction))
+		if not requested:
+			update_status("move rejected: %s" % spacetime.last_error())
+		else:
+			update_status("requested move %s" % direction)
+		return requested
 	set_player_facing_from_delta(delta)
 	var target := player_cell + delta
 	if is_cell_passable(target):
@@ -336,6 +503,7 @@ func build_object_states() -> void:
 			"idle": object_idle_offset(str(landmark.get("id", ""))),
 			"direction_index": object_direction_offset(str(landmark.get("id", ""))),
 			"facing": object_facing(landmark),
+			"server_revision": -1,
 		}
 		object_states[state["id"]] = state
 
@@ -368,6 +536,23 @@ func update_object_steps(delta: float) -> void:
 		state["idle"] = float(state.get("idle", OBJECT_IDLE_SECONDS)) - delta
 		if float(state["idle"]) <= 0.0:
 			try_start_object_wander(landmark, state)
+
+
+func update_authoritative_object_steps(delta: float) -> void:
+	for landmark in manifest.get("landmarks", []):
+		if str(landmark.get("kind", "")) != "object":
+			continue
+		var object_id := str(landmark.get("id", ""))
+		if not object_states.has(object_id):
+			continue
+		var state: Dictionary = object_states[object_id]
+		if not bool(state.get("is_stepping", false)):
+			continue
+		state["elapsed"] = float(state.get("elapsed", 0.0)) + delta
+		if float(state["elapsed"]) >= OBJECT_STEP_DURATION_SECONDS:
+			complete_object_step(landmark, state)
+		else:
+			update_object_marker_node(landmark, state, true)
 
 
 func object_can_idle_wander(landmark: Dictionary) -> bool:
@@ -829,11 +1014,28 @@ func state_snapshot() -> Dictionary:
 		"place": place_snapshot(),
 		"available_interactions": available_interactions(),
 		"nearby_semantic_cells": nearby_semantic_cells(),
+		"authority": authority_snapshot(),
+		"visible_players": spacetime.players() if spacetime_enabled and spacetime != null else [],
 		"control": {
 			"host": CONTROL_HTTP_HOST,
 			"port": control_http_port,
 			"base_url": control_base_url(),
 		},
+	}
+
+
+func authority_snapshot() -> Dictionary:
+	if not spacetime_enabled or spacetime == null:
+		return {"mode": "offline_verify", "ready": true}
+	return {
+		"mode": "spacetimedb",
+		"ready": spacetime_ready,
+		"connected": spacetime.is_connected(),
+		"subscribed": spacetime.is_subscribed(),
+		"identity": str(spacetime.local_identity()),
+		"status": str(spacetime.status()),
+		"last_error": str(spacetime.last_error()),
+		"revision": spacetime_revision,
 	}
 
 
@@ -1157,7 +1359,20 @@ func interact_with_doorway(landmark: Dictionary, distance: int) -> Dictionary:
 	var target_loaded := not target_map.is_empty() and manifests.has(target_map)
 	if target_loaded:
 		var target_cell := target_warp_cell(target_map, int(landmark.get("dest_warp_id", 0)))
-		enter_map(target_map, target_cell, "entered doorway to")
+		if spacetime_enabled:
+			if not spacetime_ready or not spacetime.use_doorway(str(landmark.get("id", ""))):
+				return {
+					"ok": true,
+					"accepted": false,
+					"target_id": str(landmark.get("id", "")),
+					"kind": "doorway",
+					"action": "enter",
+					"name": str(landmark.get("name", "")),
+					"message": "World authority rejected doorway entry: %s" % spacetime.last_error(),
+					"state": state_snapshot(),
+				}
+		else:
+			enter_map(target_map, target_cell, "entered doorway to")
 		return {
 			"ok": true,
 			"accepted": true,
@@ -1359,6 +1574,7 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 					"POST /move": "Move with JSON body like {\"direction\":\"east\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
 					"GET /stream": "Open a semantic server-sent event stream of visible world changes.",
+					"GET /screenshot": "Return the current Godot viewport as image/png.",
 				},
 			})
 		"/stream":
@@ -1367,6 +1583,15 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 			else:
 				start_sse_connection(peer, query)
 				return true
+		"/screenshot":
+			if method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use GET /screenshot."})
+			else:
+				var image: Image = get_viewport().get_texture().get_image()
+				if image == null or image.is_empty():
+					send_control_json(peer, 503, {"ok": false, "message": "Viewport capture is unavailable in this headless renderer."})
+				else:
+					send_control_bytes(peer, 200, "image/png", image.save_png_to_buffer())
 		"/maps":
 			if method != "GET":
 				send_control_json(peer, 405, {"ok": false, "message": "Use GET /maps."})
@@ -1526,7 +1751,9 @@ func stream_hello_details() -> Dictionary:
 		"control": {
 			"base_url": control_base_url(),
 			"state": "%s/state" % control_base_url(),
+			"screenshot": "%s/screenshot" % control_base_url(),
 		},
+		"authority": authority_snapshot(),
 	}
 
 

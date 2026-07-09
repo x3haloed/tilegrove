@@ -20,6 +20,8 @@ centered = false
 
 [node name="ObjectMarkers" type="Node2D" parent="."]
 
+[node name="OtherPlayers" type="Node2D" parent="."]
+
 [node name="PlayerSprite" type="Sprite2D" parent="."]
 texture_filter = 1
 z_index = 10
