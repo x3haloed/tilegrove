@@ -6,21 +6,14 @@ const CONTROL_HTTP_PORT := 38473
 const CONTROL_HTTP_PORT_SCAN_COUNT := 16
 const CONTROL_HTTP_REQUEST_TIMEOUT_MSEC := 2500
 const CONTROL_HTTP_MAX_REQUEST_BYTES := 65536
-const MAPS := {
-	"LittlerootTown": {
-		"manifest_path": "res://assets/pokeemerald/maps/littleroot_town.json",
-		"texture_path": "res://assets/pokeemerald/maps/littleroot_town.png",
-	},
-	"Route101": {
-		"manifest_path": "res://assets/pokeemerald/maps/route101.json",
-		"texture_path": "res://assets/pokeemerald/maps/route101.png",
-	},
-}
+const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
 @onready var player_marker: ColorRect = $PlayerMarker
 @onready var status_label: Label = $StatusLabel
 
+var world_registry: Dictionary = {}
+var map_registry: Dictionary = {}
 var manifests: Dictionary = {}
 var current_map_name := "LittlerootTown"
 var manifest: Dictionary = {}
@@ -56,8 +49,9 @@ func _process(_delta: float) -> void:
 
 
 func load_world_manifests() -> void:
-	for map_name in MAPS.keys():
-		var map_config: Dictionary = MAPS[map_name]
+	load_world_registry()
+	for map_name in map_registry.keys():
+		var map_config: Dictionary = map_registry[map_name]
 		var manifest_path := str(map_config["manifest_path"])
 		var file := FileAccess.open(manifest_path, FileAccess.READ)
 		if file == null:
@@ -73,6 +67,25 @@ func load_world_manifests() -> void:
 		manifests[map_name] = json.get_data()
 
 
+func load_world_registry() -> void:
+	var file := FileAccess.open(WORLD_REGISTRY_PATH, FileAccess.READ)
+	if file == null:
+		push_error("Could not open world registry: %s" % WORLD_REGISTRY_PATH)
+		return
+
+	var json := JSON.new()
+	var error := json.parse(file.get_as_text())
+	if error != OK:
+		push_error("Could not parse world registry %s: %s" % [WORLD_REGISTRY_PATH, json.get_error_message()])
+		return
+
+	world_registry = json.get_data()
+	map_registry = world_registry.get("maps", {})
+	var start_map := str(world_registry.get("start_map", current_map_name))
+	if map_registry.has(start_map):
+		current_map_name = start_map
+
+
 func enter_map(map_name: String, cell: Vector2i, prefix := "entered") -> bool:
 	if not manifests.has(map_name):
 		update_status("missing map %s" % map_name)
@@ -81,7 +94,7 @@ func enter_map(map_name: String, cell: Vector2i, prefix := "entered") -> bool:
 	current_map_name = map_name
 	manifest = manifests[map_name]
 
-	var map_config: Dictionary = MAPS[map_name]
+	var map_config: Dictionary = map_registry[map_name]
 	var texture := load_map_texture(str(map_config["texture_path"]))
 	if texture != null:
 		map_sprite.texture = texture
@@ -205,18 +218,22 @@ func connected_cell(target_map: String, direction: String, offset: int, attempte
 	var height := int(target_manifest.get("height", 0))
 	match direction:
 		"up":
-			return Vector2i(attempted_cell.x + offset, height - 1)
+			return Vector2i(attempted_cell.x - offset, height - 1)
 		"down":
-			return Vector2i(attempted_cell.x + offset, 0)
+			return Vector2i(attempted_cell.x - offset, 0)
 		"left":
-			return Vector2i(width - 1, attempted_cell.y + offset)
+			return Vector2i(width - 1, attempted_cell.y - offset)
 		"right":
-			return Vector2i(0, attempted_cell.y + offset)
+			return Vector2i(0, attempted_cell.y - offset)
 		_:
 			return Vector2i(-1, -1)
 
 
 func map_constant_to_world_name(map_constant: String) -> String:
+	var constants: Dictionary = world_registry.get("map_constants", {})
+	if constants.has(map_constant):
+		return str(constants[map_constant])
+
 	var normalized_constant := normalized_map_name(map_constant.trim_prefix("MAP_"))
 	for map_name in manifests.keys():
 		if normalized_map_name(str(map_name)) == normalized_constant:
@@ -332,6 +349,10 @@ func state_snapshot() -> Dictionary:
 	return {
 		"ok": true,
 		"map": current_map_name,
+		"world": {
+			"map_count": int(world_registry.get("map_count", map_registry.size())),
+			"loaded_maps": map_registry.keys(),
+		},
 		"dimensions": {
 			"width": int(manifest.get("width", 0)),
 			"height": int(manifest.get("height", 0)),
@@ -396,6 +417,21 @@ func connection_summaries() -> Array:
 			"map": world_name,
 			"loaded": not world_name.is_empty() and manifests.has(world_name),
 			"offset": int(connection.get("offset", 0)),
+		})
+	return summaries
+
+
+func map_summaries() -> Array:
+	var summaries := []
+	for map_name in map_registry.keys():
+		var config: Dictionary = map_registry[map_name]
+		summaries.append({
+			"map": str(map_name),
+			"width": int(config.get("width", 0)),
+			"height": int(config.get("height", 0)),
+			"layout": str(config.get("layout", "")),
+			"connections": config.get("connections", []),
+			"warp_count": int(config.get("warp_count", 0)),
 		})
 	return summaries
 
@@ -536,10 +572,21 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> void:
 				"base_url": control_base_url(),
 				"endpoints": {
 					"GET /state": "Return current player cell and blocked/passable directions.",
+					"GET /maps": "Return loaded world maps and their connection summaries.",
 					"POST /move": "Move with JSON body like {\"direction\":\"east\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
 				},
 			})
+		"/maps":
+			if method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use GET /maps."})
+			else:
+				send_control_json(peer, 200, {
+					"ok": true,
+					"map_count": int(world_registry.get("map_count", map_registry.size())),
+					"start_map": str(world_registry.get("start_map", "")),
+					"maps": map_summaries(),
+				})
 		"/state":
 			if method != "GET":
 				send_control_json(peer, 405, {"ok": false, "message": "Use GET /state."})

@@ -36,6 +36,10 @@ func _run() -> void:
 		push_error("Expected start cell to be passable.")
 		quit(1)
 		return
+	if root.map_registry.size() != 6:
+		push_error("Expected six registry-backed maps, got %d." % root.map_registry.size())
+		quit(1)
+		return
 	if not root.try_move(Vector2i.RIGHT):
 		push_error("Expected movement right from start to succeed.")
 		quit(1)
@@ -70,7 +74,46 @@ func _run() -> void:
 		push_error("Expected LittlerootTown at north edge after returning, got %s %s." % [root.current_map_name, root.player_cell])
 		quit(1)
 		return
-	print("connection gate: LittlerootTown <-> Route101 boundary crossing works")
+
+	if not root.enter_map("Route101", Vector2i(10, 0), "verify"):
+		push_error("Expected Route101 to be loaded.")
+		quit(1)
+		return
+	if not root.try_move(Vector2i.UP):
+		push_error("Expected Route101 north edge to cross into OldaleTown.")
+		quit(1)
+		return
+	if root.current_map_name != "OldaleTown" or root.player_cell != Vector2i(10, 19):
+		push_error("Expected OldaleTown at south edge after crossing, got %s %s." % [root.current_map_name, root.player_cell])
+		quit(1)
+		return
+
+	if not root.enter_map("OldaleTown", Vector2i(0, 10), "verify"):
+		push_error("Expected OldaleTown to be loaded.")
+		quit(1)
+		return
+	if not root.try_move(Vector2i.LEFT):
+		push_error("Expected OldaleTown west edge to cross into Route102.")
+		quit(1)
+		return
+	if root.current_map_name != "Route102" or root.player_cell != Vector2i(49, 10):
+		push_error("Expected Route102 at east edge after crossing, got %s %s." % [root.current_map_name, root.player_cell])
+		quit(1)
+		return
+
+	if not root.enter_map("Route102", Vector2i(0, 6), "verify"):
+		push_error("Expected Route102 to be loaded.")
+		quit(1)
+		return
+	if not root.try_move(Vector2i.LEFT):
+		push_error("Expected Route102 west edge to cross into PetalburgCity with offset.")
+		quit(1)
+		return
+	if root.current_map_name != "PetalburgCity" or root.player_cell != Vector2i(29, 16):
+		push_error("Expected PetalburgCity at east edge after offset crossing, got %s %s." % [root.current_map_name, root.player_cell])
+		quit(1)
+		return
+	print("connection gate: registry maps and offset crossings work")
 
 	get_root().remove_child(root)
 	root.free()

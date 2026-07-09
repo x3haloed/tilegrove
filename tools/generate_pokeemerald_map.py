@@ -251,21 +251,24 @@ def build_manifest(
     }
 
 
-def main() -> None:
-    args = parse_args()
-    root = Path(args.pokeemerald_root)
-    map_data = read_json(root / f"data/maps/{args.map}/map.json")
-    layout = load_layout(root, map_data["layout"])
+def generate_map(
+    pokeemerald_root: Path,
+    map_name: str,
+    output_path: Path | None = None,
+    manifest_path: Path | None = None,
+) -> dict:
+    map_data = read_json(pokeemerald_root / f"data/maps/{map_name}/map.json")
+    layout = load_layout(pokeemerald_root, map_data["layout"])
 
     width = int(layout["width"])
     height = int(layout["height"])
-    primary = load_tileset(root, layout["primary_tileset"])
-    secondary = load_tileset(root, layout["secondary_tileset"])
-    blockdata = (root / layout["blockdata_filepath"]).read_bytes()
+    primary = load_tileset(pokeemerald_root, layout["primary_tileset"])
+    secondary = load_tileset(pokeemerald_root, layout["secondary_tileset"])
+    blockdata = (pokeemerald_root / layout["blockdata_filepath"]).read_bytes()
     expected_size = width * height * 2
     if len(blockdata) != expected_size:
         raise ValueError(
-            f"Unexpected blockdata size for {args.map}: {len(blockdata)} != {expected_size}"
+            f"Unexpected blockdata size for {map_name}: {len(blockdata)} != {expected_size}"
         )
 
     output = Image.new("RGBA", (width * METATILE_SIZE, height * METATILE_SIZE))
@@ -275,17 +278,37 @@ def main() -> None:
         y = (index // width) * METATILE_SIZE
         draw_metatile(output, primary, secondary, block_value, x, y)
 
-    slug = map_slug(args.map)
-    output_path = Path(args.output or f"godot/assets/pokeemerald/maps/{slug}.png")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output.save(output_path)
-    print(f"Wrote {output_path} ({output.width}x{output.height})")
+    slug = map_slug(map_name)
+    resolved_output_path = output_path or Path(f"godot/assets/pokeemerald/maps/{slug}.png")
+    resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+    output.save(resolved_output_path)
+    print(f"Wrote {resolved_output_path} ({output.width}x{output.height})")
 
-    manifest = build_manifest(args.map, map_data, layout, primary, secondary, values)
-    manifest_path = Path(args.manifest_output or f"godot/assets/pokeemerald/maps/{slug}.json")
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"Wrote {manifest_path} ({width}x{height} cells)")
+    manifest = build_manifest(map_name, map_data, layout, primary, secondary, values)
+    resolved_manifest_path = manifest_path or Path(f"godot/assets/pokeemerald/maps/{slug}.json")
+    resolved_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"Wrote {resolved_manifest_path} ({width}x{height} cells)")
+
+    return {
+        "map": map_name,
+        "slug": slug,
+        "output_path": str(resolved_output_path),
+        "manifest_path": str(resolved_manifest_path),
+        "manifest": manifest,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    root = Path(args.pokeemerald_root)
+    slug = map_slug(args.map)
+    generate_map(
+        root,
+        args.map,
+        Path(args.output) if args.output else Path(f"godot/assets/pokeemerald/maps/{slug}.png"),
+        Path(args.manifest_output) if args.manifest_output else Path(f"godot/assets/pokeemerald/maps/{slug}.json"),
+    )
 
 
 if __name__ == "__main__":
