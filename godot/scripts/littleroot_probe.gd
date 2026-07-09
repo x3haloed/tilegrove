@@ -7,6 +7,7 @@ const CONTROL_HTTP_PORT_SCAN_COUNT := 16
 const CONTROL_HTTP_REQUEST_TIMEOUT_MSEC := 2500
 const CONTROL_HTTP_MAX_REQUEST_BYTES := 65536
 const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
+const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
 @onready var object_markers: Node2D = $ObjectMarkers
@@ -335,12 +336,49 @@ func update_object_markers() -> void:
 			continue
 		for raw_cell in landmark.get("cells", []):
 			var cell := Vector2i(int(raw_cell.get("x", 0)), int(raw_cell.get("y", 0)))
-			var marker := ColorRect.new()
-			marker.name = str(landmark.get("id", "object"))
-			marker.color = object_marker_color(landmark)
-			marker.size = marker_size - Vector2(inset * 2.0, inset * 2.0)
-			marker.position = map_sprite.position + Vector2(cell * TILE_SIZE) * scale_factor + Vector2(inset, inset)
-			object_markers.add_child(marker)
+			var sprite_texture := object_sprite_texture(landmark)
+			if sprite_texture != null:
+				var sprite := Sprite2D.new()
+				sprite.name = str(landmark.get("id", "object"))
+				sprite.centered = false
+				sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+				sprite.texture = sprite_texture
+				sprite.scale = map_sprite.scale
+				sprite.position = object_sprite_position(cell, sprite_texture)
+				object_markers.add_child(sprite)
+			else:
+				var marker := ColorRect.new()
+				marker.name = str(landmark.get("id", "object"))
+				marker.color = object_marker_color(landmark)
+				marker.size = marker_size - Vector2(inset * 2.0, inset * 2.0)
+				marker.position = map_sprite.position + Vector2(cell * TILE_SIZE) * scale_factor + Vector2(inset, inset)
+				object_markers.add_child(marker)
+
+
+func object_sprite_position(cell: Vector2i, texture: Texture2D) -> Vector2:
+	var scale_factor: float = map_sprite.scale.x
+	var source_size := Vector2(texture.get_width(), texture.get_height())
+	var local_position := Vector2(cell * TILE_SIZE)
+	local_position.x += (TILE_SIZE - source_size.x) / 2.0
+	local_position.y += TILE_SIZE - source_size.y
+	return map_sprite.position + local_position * scale_factor
+
+
+func object_sprite_texture(landmark: Dictionary) -> Texture2D:
+	var path := object_sprite_path(str(landmark.get("graphics_id", "")))
+	if path.is_empty():
+		return null
+	return load_map_texture(path)
+
+
+func object_sprite_path(graphics_id: String) -> String:
+	if graphics_id.is_empty() or not graphics_id.begins_with("OBJ_EVENT_GFX_"):
+		return ""
+	var slug := graphics_id.trim_prefix("OBJ_EVENT_GFX_").to_lower()
+	var path := "%s/%s.png" % [OBJECT_SPRITE_ROOT, slug]
+	if ResourceLoader.exists(path) or FileAccess.file_exists(path):
+		return path
+	return ""
 
 
 func object_marker_color(landmark: Dictionary) -> Color:
@@ -595,9 +633,15 @@ func show_interaction_result(result: Dictionary) -> void:
 
 	match str(result.get("kind", "")):
 		"sign":
-			message_label.text = str(result.get("text", ""))
+			message_label.text = "%s:\n%s" % [
+				str(result.get("name", "Sign")),
+				str(result.get("text", "")),
+			]
 		"object":
-			message_label.text = str(result.get("text", result.get("message", "")))
+			message_label.text = "%s says:\n%s" % [
+				str(result.get("name", "Someone")),
+				str(result.get("text", result.get("message", ""))),
+			]
 		"doorway":
 			if str(result.get("result_type", "")) == "entered_loaded_doorway":
 				message_label.text = "Entered %s." % str(result.get("target_map", ""))

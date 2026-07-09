@@ -50,6 +50,14 @@ func _run() -> void:
 		push_error("Expected visible object markers on the map.")
 		quit(1)
 		return
+	var sprite_marker_count := 0
+	for marker in object_markers.get_children():
+		if marker is Sprite2D:
+			sprite_marker_count += 1
+	if sprite_marker_count < 3:
+		push_error("Expected generated object sprites on the map.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(15, 13), "verify"):
 		push_error("Expected LittlerootTown to be loaded for sign interaction.")
 		quit(1)
@@ -89,6 +97,10 @@ func _run() -> void:
 		return
 	if not str(npc_result.get("text", "")).contains("science is staggering"):
 		push_error("Expected NPC interaction to return extracted dialogue.")
+		quit(1)
+		return
+	if not message_label.text.contains("Fat Man says:") or not message_label.text.contains("science is staggering"):
+		push_error("Expected GUI message label to name the NPC speaker.")
 		quit(1)
 		return
 	if not root.enter_map("LittlerootTown", Vector2i(7, 16), "verify"):
