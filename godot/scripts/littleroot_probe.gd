@@ -1,17 +1,28 @@
 extends Node2D
 
-const MANIFEST_PATH := "res://assets/pokeemerald/maps/littleroot_town.json"
 const TILE_SIZE := 16
 const CONTROL_HTTP_HOST := "127.0.0.1"
 const CONTROL_HTTP_PORT := 38473
 const CONTROL_HTTP_PORT_SCAN_COUNT := 16
 const CONTROL_HTTP_REQUEST_TIMEOUT_MSEC := 2500
 const CONTROL_HTTP_MAX_REQUEST_BYTES := 65536
+const MAPS := {
+	"LittlerootTown": {
+		"manifest_path": "res://assets/pokeemerald/maps/littleroot_town.json",
+		"texture_path": "res://assets/pokeemerald/maps/littleroot_town.png",
+	},
+	"Route101": {
+		"manifest_path": "res://assets/pokeemerald/maps/route101.json",
+		"texture_path": "res://assets/pokeemerald/maps/route101.png",
+	},
+}
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
 @onready var player_marker: ColorRect = $PlayerMarker
 @onready var status_label: Label = $StatusLabel
 
+var manifests: Dictionary = {}
+var current_map_name := "LittlerootTown"
 var manifest: Dictionary = {}
 var player_cell := Vector2i(10, 15)
 var control_server := TCPServer.new()
@@ -21,9 +32,8 @@ var control_http_status := "control endpoint stopped"
 
 
 func _ready() -> void:
-	load_manifest()
-	if not is_cell_passable(player_cell):
-		player_cell = first_passable_cell()
+	load_world_manifests()
+	enter_map(current_map_name, player_cell, "ready")
 	start_control_http()
 	update_player_marker()
 	update_status("ready")
@@ -45,19 +55,59 @@ func _process(_delta: float) -> void:
 	poll_control_http()
 
 
-func load_manifest() -> void:
-	var file := FileAccess.open(MANIFEST_PATH, FileAccess.READ)
-	if file == null:
-		push_error("Could not open Littleroot manifest: %s" % MANIFEST_PATH)
-		return
+func load_world_manifests() -> void:
+	for map_name in MAPS.keys():
+		var map_config: Dictionary = MAPS[map_name]
+		var manifest_path := str(map_config["manifest_path"])
+		var file := FileAccess.open(manifest_path, FileAccess.READ)
+		if file == null:
+			push_error("Could not open map manifest: %s" % manifest_path)
+			continue
 
-	var json := JSON.new()
-	var error := json.parse(file.get_as_text())
-	if error != OK:
-		push_error("Could not parse Littleroot manifest: %s" % json.get_error_message())
-		return
+		var json := JSON.new()
+		var error := json.parse(file.get_as_text())
+		if error != OK:
+			push_error("Could not parse map manifest %s: %s" % [manifest_path, json.get_error_message()])
+			continue
 
-	manifest = json.get_data()
+		manifests[map_name] = json.get_data()
+
+
+func enter_map(map_name: String, cell: Vector2i, prefix := "entered") -> bool:
+	if not manifests.has(map_name):
+		update_status("missing map %s" % map_name)
+		return false
+
+	current_map_name = map_name
+	manifest = manifests[map_name]
+
+	var map_config: Dictionary = MAPS[map_name]
+	var texture := load_map_texture(str(map_config["texture_path"]))
+	if texture != null:
+		map_sprite.texture = texture
+
+	player_cell = cell
+	if not is_cell_passable(player_cell):
+		player_cell = nearest_passable_cell(player_cell)
+	update_player_marker()
+	update_status("%s %s" % [prefix, current_map_name])
+	return true
+
+
+func load_map_texture(texture_path: String) -> Texture2D:
+	if ResourceLoader.exists(texture_path):
+		var resource := ResourceLoader.load(texture_path) as Texture2D
+		if resource != null:
+			return resource
+
+	if FileAccess.file_exists(texture_path):
+		var image := Image.new()
+		var error := image.load(texture_path)
+		if error == OK:
+			return ImageTexture.create_from_image(image)
+
+	push_warning("Could not load map texture: %s" % texture_path)
+	return null
 
 
 func try_move(delta: Vector2i) -> bool:
@@ -67,6 +117,9 @@ func try_move(delta: Vector2i) -> bool:
 		update_player_marker()
 		update_status("moved to %s" % cell_text(player_cell))
 		return true
+
+	if not is_cell_in_bounds(target):
+		return try_cross_connection(delta, target)
 
 	update_status("blocked at %s" % cell_text(target))
 	return false
@@ -107,19 +160,103 @@ func direction_delta(direction: String) -> Vector2i:
 			return Vector2i.ZERO
 
 
+func connection_direction(delta: Vector2i) -> String:
+	if delta == Vector2i.UP:
+		return "up"
+	if delta == Vector2i.DOWN:
+		return "down"
+	if delta == Vector2i.LEFT:
+		return "left"
+	if delta == Vector2i.RIGHT:
+		return "right"
+	return ""
+
+
+func try_cross_connection(delta: Vector2i, target: Vector2i) -> bool:
+	var direction := connection_direction(delta)
+	var connection := find_connection(direction)
+	if connection.is_empty():
+		update_status("blocked at edge %s" % cell_text(target))
+		return false
+
+	var target_map := map_constant_to_world_name(str(connection.get("map", "")))
+	if target_map.is_empty() or not manifests.has(target_map):
+		update_status("unloaded connection %s" % str(connection.get("map", "")))
+		return false
+
+	var target_cell := connected_cell(target_map, direction, int(connection.get("offset", 0)), target)
+	if not is_cell_passable_in(target_map, target_cell):
+		update_status("blocked entering %s %s" % [target_map, cell_text(target_cell)])
+		return false
+
+	return enter_map(target_map, target_cell, "crossed %s to" % direction)
+
+
+func find_connection(direction: String) -> Dictionary:
+	for connection in manifest.get("connections", []):
+		if str(connection.get("direction", "")) == direction:
+			return connection
+	return {}
+
+
+func connected_cell(target_map: String, direction: String, offset: int, attempted_cell: Vector2i) -> Vector2i:
+	var target_manifest: Dictionary = manifests[target_map]
+	var width := int(target_manifest.get("width", 0))
+	var height := int(target_manifest.get("height", 0))
+	match direction:
+		"up":
+			return Vector2i(attempted_cell.x + offset, height - 1)
+		"down":
+			return Vector2i(attempted_cell.x + offset, 0)
+		"left":
+			return Vector2i(width - 1, attempted_cell.y + offset)
+		"right":
+			return Vector2i(0, attempted_cell.y + offset)
+		_:
+			return Vector2i(-1, -1)
+
+
+func map_constant_to_world_name(map_constant: String) -> String:
+	var normalized_constant := normalized_map_name(map_constant.trim_prefix("MAP_"))
+	for map_name in manifests.keys():
+		if normalized_map_name(str(map_name)) == normalized_constant:
+			return str(map_name)
+	return ""
+
+
+func normalized_map_name(value: String) -> String:
+	return value.to_lower().replace("_", "").replace(" ", "")
+
+
 func is_cell_passable(cell: Vector2i) -> bool:
 	var data := cell_data(cell)
 	return not data.is_empty() and bool(data.get("passable", false))
 
 
+func is_cell_passable_in(map_name: String, cell: Vector2i) -> bool:
+	var data := cell_data_in(map_name, cell)
+	return not data.is_empty() and bool(data.get("passable", false))
+
+
+func is_cell_in_bounds(cell: Vector2i) -> bool:
+	return cell.x >= 0 and cell.y >= 0 and cell.x < int(manifest.get("width", 0)) and cell.y < int(manifest.get("height", 0))
+
+
 func cell_data(cell: Vector2i) -> Dictionary:
+	return cell_data_in(current_map_name, cell)
+
+
+func cell_data_in(map_name: String, cell: Vector2i) -> Dictionary:
 	if manifest.is_empty():
 		return {}
+	if not manifests.has(map_name):
+		return {}
+	var map_manifest: Dictionary = manifests[map_name]
 	if cell.x < 0 or cell.y < 0:
 		return {}
-	if cell.x >= int(manifest.get("width", 0)) or cell.y >= int(manifest.get("height", 0)):
+	if cell.x >= int(map_manifest.get("width", 0)) or cell.y >= int(map_manifest.get("height", 0)):
 		return {}
-	return manifest["cells"][cell.y][cell.x]
+	return map_manifest["cells"][cell.y][cell.x]
 
 
 func first_passable_cell() -> Vector2i:
@@ -131,6 +268,23 @@ func first_passable_cell() -> Vector2i:
 	return Vector2i.ZERO
 
 
+func nearest_passable_cell(origin: Vector2i) -> Vector2i:
+	if is_cell_passable(origin):
+		return origin
+	var best_cell := first_passable_cell()
+	var best_distance := 1000000
+	for y in range(int(manifest.get("height", 0))):
+		for x in range(int(manifest.get("width", 0))):
+			var candidate := Vector2i(x, y)
+			if not is_cell_passable(candidate):
+				continue
+			var distance: int = abs(candidate.x - origin.x) + abs(candidate.y - origin.y)
+			if distance < best_distance:
+				best_distance = distance
+				best_cell = candidate
+	return best_cell
+
+
 func update_player_marker() -> void:
 	var scale_factor := map_sprite.scale.x
 	var marker_size := Vector2(TILE_SIZE, TILE_SIZE) * scale_factor
@@ -140,8 +294,9 @@ func update_player_marker() -> void:
 
 func update_status(prefix: String) -> void:
 	var data := cell_data(player_cell)
-	status_label.text = "%s\ncell %s\ncollision %d | elevation %d\nmetatile %d\n%s" % [
+	status_label.text = "%s\nmap %s\ncell %s\ncollision %d | elevation %d\nmetatile %d\n%s" % [
 		prefix,
+		current_map_name,
 		cell_text(player_cell),
 		int(data.get("collision", -1)),
 		int(data.get("elevation", -1)),
@@ -169,26 +324,115 @@ func state_snapshot() -> Dictionary:
 	var passable_directions := []
 	var blocked_directions := []
 	for direction in directions.keys():
-		if is_cell_passable(directions[direction]):
+		if can_move_direction(str(direction), directions[direction]):
 			passable_directions.append(direction)
 		else:
 			blocked_directions.append(direction)
 
 	return {
 		"ok": true,
-		"map": manifest.get("map", "unknown"),
+		"map": current_map_name,
+		"dimensions": {
+			"width": int(manifest.get("width", 0)),
+			"height": int(manifest.get("height", 0)),
+		},
 		"cell": cell_to_dict(player_cell),
 		"collision": int(cell.get("collision", -1)),
 		"elevation": int(cell.get("elevation", -1)),
 		"metatile_id": int(cell.get("metatile_id", -1)),
 		"passable_directions": passable_directions,
 		"blocked_directions": blocked_directions,
+		"connections": connection_summaries(),
+		"warps_here": warps_at_cell(player_cell),
+		"nearby_semantic_cells": nearby_semantic_cells(),
 		"control": {
 			"host": CONTROL_HTTP_HOST,
 			"port": control_http_port,
 			"base_url": control_base_url(),
 		},
 	}
+
+
+func can_move_direction(direction: String, target: Vector2i) -> bool:
+	if is_cell_passable(target):
+		return true
+	if is_cell_in_bounds(target):
+		return false
+
+	var connection := find_connection(control_direction_to_connection_direction(direction))
+	if connection.is_empty():
+		return false
+	var target_map := map_constant_to_world_name(str(connection.get("map", "")))
+	if target_map.is_empty() or not manifests.has(target_map):
+		return false
+	return is_cell_passable_in(
+		target_map,
+		connected_cell(target_map, control_direction_to_connection_direction(direction), int(connection.get("offset", 0)), target)
+	)
+
+
+func control_direction_to_connection_direction(direction: String) -> String:
+	match direction:
+		"north":
+			return "up"
+		"south":
+			return "down"
+		"west":
+			return "left"
+		"east":
+			return "right"
+		_:
+			return direction
+
+
+func connection_summaries() -> Array:
+	var summaries := []
+	for connection in manifest.get("connections", []):
+		var raw_map := str(connection.get("map", ""))
+		var world_name := map_constant_to_world_name(raw_map)
+		summaries.append({
+			"direction": str(connection.get("direction", "")),
+			"raw_map": raw_map,
+			"map": world_name,
+			"loaded": not world_name.is_empty() and manifests.has(world_name),
+			"offset": int(connection.get("offset", 0)),
+		})
+	return summaries
+
+
+func warps_at_cell(cell: Vector2i) -> Array:
+	var warps := []
+	for warp in manifest.get("warp_events", []):
+		if int(warp.get("x", -1)) == cell.x and int(warp.get("y", -1)) == cell.y:
+			warps.append(warp)
+	return warps
+
+
+func nearby_semantic_cells() -> Dictionary:
+	var cells := {
+		"here": player_cell,
+		"north": player_cell + Vector2i.UP,
+		"south": player_cell + Vector2i.DOWN,
+		"west": player_cell + Vector2i.LEFT,
+		"east": player_cell + Vector2i.RIGHT,
+	}
+	var result := {}
+	for key in cells.keys():
+		var cell: Vector2i = cells[key]
+		var data := cell_data(cell)
+		if data.is_empty():
+			result[key] = {"cell": cell_to_dict(cell), "in_bounds": false}
+		else:
+			result[key] = {
+				"cell": cell_to_dict(cell),
+				"in_bounds": true,
+				"collision": int(data.get("collision", -1)),
+				"elevation": int(data.get("elevation", -1)),
+				"metatile_id": int(data.get("metatile_id", -1)),
+				"behavior": data.get("behavior", null),
+				"passable": bool(data.get("passable", false)),
+			}
+	return result
 
 
 func control_base_url() -> String:

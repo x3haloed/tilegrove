@@ -38,15 +38,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--map", default="LittlerootTown", help="Map directory name.")
     parser.add_argument(
         "--output",
-        default="godot/assets/pokeemerald/maps/littleroot_town.png",
-        help="Output PNG path.",
+        help="Output PNG path. Defaults to godot/assets/pokeemerald/maps/<map>.png.",
     )
     parser.add_argument(
         "--manifest-output",
-        default="godot/assets/pokeemerald/maps/littleroot_town.json",
-        help="Output semantic manifest JSON path.",
+        help="Output semantic manifest JSON path. Defaults to godot/assets/pokeemerald/maps/<map>.json.",
     )
     return parser.parse_args()
+
+
+def map_slug(map_name: str) -> str:
+    slug = []
+    for index, character in enumerate(map_name):
+        if character.isupper() and index > 0 and not map_name[index - 1].isupper():
+            slug.append("_")
+        slug.append(character.lower())
+    return "".join(slug)
 
 
 def read_json(path: Path) -> dict:
@@ -268,13 +275,14 @@ def main() -> None:
         y = (index // width) * METATILE_SIZE
         draw_metatile(output, primary, secondary, block_value, x, y)
 
-    output_path = Path(args.output)
+    slug = map_slug(args.map)
+    output_path = Path(args.output or f"godot/assets/pokeemerald/maps/{slug}.png")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.save(output_path)
     print(f"Wrote {output_path} ({output.width}x{output.height})")
 
     manifest = build_manifest(args.map, map_data, layout, primary, secondary, values)
-    manifest_path = Path(args.manifest_output)
+    manifest_path = Path(args.manifest_output or f"godot/assets/pokeemerald/maps/{slug}.json")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Wrote {manifest_path} ({width}x{height} cells)")

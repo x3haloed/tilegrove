@@ -50,6 +50,28 @@ func _run() -> void:
 		return
 	print("movement gate: passable move accepted, blocked move rejected")
 
+	if not root.enter_map("LittlerootTown", Vector2i(10, 0), "verify"):
+		push_error("Expected LittlerootTown to be loaded.")
+		quit(1)
+		return
+	if not root.try_move(Vector2i.UP):
+		push_error("Expected north edge to cross into Route101.")
+		quit(1)
+		return
+	if root.current_map_name != "Route101" or root.player_cell != Vector2i(10, 19):
+		push_error("Expected Route101 at south edge after crossing, got %s %s." % [root.current_map_name, root.player_cell])
+		quit(1)
+		return
+	if not root.try_move(Vector2i.DOWN):
+		push_error("Expected south edge to cross back into LittlerootTown.")
+		quit(1)
+		return
+	if root.current_map_name != "LittlerootTown" or root.player_cell != Vector2i(10, 0):
+		push_error("Expected LittlerootTown at north edge after returning, got %s %s." % [root.current_map_name, root.player_cell])
+		quit(1)
+		return
+	print("connection gate: LittlerootTown <-> Route101 boundary crossing works")
+
 	get_root().remove_child(root)
 	root.free()
 	quit(0)
