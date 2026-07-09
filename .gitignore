@@ -90,6 +90,13 @@ Cargo.lock
 .tinygrove/
 godot/bin/
 
+# Locally generated Pokemon-derived assets.
+# Keep the generators in git; regenerate these from a local pokeemerald checkout.
+godot/assets/pokeemerald/**
+!godot/assets/pokeemerald/
+!godot/assets/pokeemerald/README.md
+tools/__pycache__/
+
 ### VisualStudioCode ###
 .vscode/*
 !.vscode/settings.json
