@@ -45,6 +45,11 @@ func _run() -> void:
 		push_error("Expected nearby landmarks from /look at start cell.")
 		quit(1)
 		return
+	var object_markers := root.get_node_or_null("ObjectMarkers") as Node2D
+	if object_markers == null or object_markers.get_child_count() < 3:
+		push_error("Expected visible object markers on the map.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(15, 13), "verify"):
 		push_error("Expected LittlerootTown to be loaded for sign interaction.")
 		quit(1)
@@ -63,11 +68,34 @@ func _run() -> void:
 		push_error("Expected sign interaction to return extracted text.")
 		quit(1)
 		return
+	var gui_sign_result: Dictionary = root.perform_nearest_interaction()
+	if not bool(gui_sign_result.get("accepted", false)) or str(gui_sign_result.get("kind", "")) != "sign":
+		push_error("Expected nearest GUI sign interaction to be accepted.")
+		quit(1)
+		return
+	var message_label := root.get_node_or_null("MessageLabel") as Label
+	if message_label == null or not message_label.text.contains("LITTLEROOT TOWN"):
+		push_error("Expected GUI message label to show extracted sign text.")
+		quit(1)
+		return
+	if not root.enter_map("LittlerootTown", Vector2i(12, 13), "verify"):
+		push_error("Expected LittlerootTown to be loaded for NPC interaction.")
+		quit(1)
+		return
+	var npc_result: Dictionary = root.perform_nearest_interaction()
+	if not bool(npc_result.get("accepted", false)) or str(npc_result.get("kind", "")) != "object":
+		push_error("Expected nearest GUI NPC interaction to be accepted.")
+		quit(1)
+		return
+	if not str(npc_result.get("text", "")).contains("science is staggering"):
+		push_error("Expected NPC interaction to return extracted dialogue.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(7, 16), "verify"):
 		push_error("Expected LittlerootTown to be loaded for doorway interaction.")
 		quit(1)
 		return
-	var doorway_result: Dictionary = root.interact_with_target("warp_2_7_16")
+	var doorway_result: Dictionary = root.perform_nearest_interaction()
 	if not bool(doorway_result.get("accepted", false)) or str(doorway_result.get("kind", "")) != "doorway":
 		push_error("Expected doorway interaction to be accepted.")
 		quit(1)
@@ -89,7 +117,7 @@ func _run() -> void:
 		push_error("Expected LittlerootTown to be loaded before movement checks.")
 		quit(1)
 		return
-	print("interaction gate: sign text extracted and loaded doorway entered")
+	print("interaction gate: sign text, NPC dialogue, and loaded doorway entry work")
 	if not root.try_move(Vector2i.RIGHT):
 		push_error("Expected movement right from start to succeed.")
 		quit(1)

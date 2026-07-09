@@ -18,6 +18,8 @@ scale = Vector2(1.8, 1.8)
 texture = ExtResource("1_littleroot_map")
 centered = false
 
+[node name="ObjectMarkers" type="Node2D" parent="."]
+
 [node name="ProbeLabel" type="Label" parent="."]
 offset_left = 16.0
 offset_top = 14.0
@@ -31,6 +33,22 @@ offset_top = 56.0
 offset_right = 1120.0
 offset_bottom = 146.0
 text = "loading manifest"
+
+[node name="InteractionLabel" type="Label" parent="."]
+offset_left = 704.0
+offset_top = 164.0
+offset_right = 1120.0
+offset_bottom = 218.0
+text = "Nearby: none"
+autowrap_mode = 3
+
+[node name="MessageLabel" type="Label" parent="."]
+offset_left = 704.0
+offset_top = 242.0
+offset_right = 1120.0
+offset_bottom = 420.0
+text = ""
+autowrap_mode = 3
 
 [node name="PlayerMarker" type="ColorRect" parent="."]
 offset_left = 320.0

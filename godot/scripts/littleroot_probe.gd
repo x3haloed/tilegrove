@@ -9,8 +9,11 @@ const CONTROL_HTTP_MAX_REQUEST_BYTES := 65536
 const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
+@onready var object_markers: Node2D = $ObjectMarkers
 @onready var player_marker: ColorRect = $PlayerMarker
 @onready var status_label: Label = $StatusLabel
+@onready var interaction_label: Label = $InteractionLabel
+@onready var message_label: Label = $MessageLabel
 
 var world_registry: Dictionary = {}
 var map_registry: Dictionary = {}
@@ -22,6 +25,7 @@ var control_server := TCPServer.new()
 var control_connections: Array[Dictionary] = []
 var control_http_port := 0
 var control_http_status := "control endpoint stopped"
+var interact_key_was_down := false
 
 
 func _ready() -> void:
@@ -45,7 +49,16 @@ func _process(_delta: float) -> void:
 
 	if movement != Vector2i.ZERO:
 		try_move(movement)
+	if interact_pressed():
+		perform_nearest_interaction()
 	poll_control_http()
+
+
+func interact_pressed() -> bool:
+	var e_key_down := Input.is_key_pressed(KEY_E)
+	var pressed := Input.is_action_just_pressed("ui_accept") or (e_key_down and not interact_key_was_down)
+	interact_key_was_down = e_key_down
+	return pressed
 
 
 func load_world_manifests() -> void:
@@ -102,6 +115,7 @@ func enter_map(map_name: String, cell: Vector2i, prefix := "entered") -> bool:
 	player_cell = cell
 	if not is_cell_passable(player_cell):
 		player_cell = nearest_passable_cell(player_cell)
+	update_object_markers()
 	update_player_marker()
 	update_status("%s %s" % [prefix, current_map_name])
 	return true
@@ -309,6 +323,34 @@ func update_player_marker() -> void:
 	player_marker.position = map_sprite.position + Vector2(player_cell * TILE_SIZE) * scale_factor
 
 
+func update_object_markers() -> void:
+	for child in object_markers.get_children():
+		child.free()
+
+	var scale_factor: float = map_sprite.scale.x
+	var marker_size: Vector2 = Vector2(TILE_SIZE, TILE_SIZE) * scale_factor
+	var inset: float = maxf(3.0, 3.0 * scale_factor)
+	for landmark in manifest.get("landmarks", []):
+		if str(landmark.get("kind", "")) != "object":
+			continue
+		for raw_cell in landmark.get("cells", []):
+			var cell := Vector2i(int(raw_cell.get("x", 0)), int(raw_cell.get("y", 0)))
+			var marker := ColorRect.new()
+			marker.name = str(landmark.get("id", "object"))
+			marker.color = object_marker_color(landmark)
+			marker.size = marker_size - Vector2(inset * 2.0, inset * 2.0)
+			marker.position = map_sprite.position + Vector2(cell * TILE_SIZE) * scale_factor + Vector2(inset, inset)
+			object_markers.add_child(marker)
+
+
+func object_marker_color(landmark: Dictionary) -> Color:
+	if str(landmark.get("script", "")) == "0x0":
+		return Color(0.48, 0.52, 0.58, 0.7)
+	if landmark.has("text"):
+		return Color(0.16, 0.45, 1.0, 0.88)
+	return Color(0.32, 0.76, 0.46, 0.82)
+
+
 func update_status(prefix: String) -> void:
 	var data := cell_data(player_cell)
 	status_label.text = "%s\nmap %s\ncell %s\ncollision %d | elevation %d\nmetatile %d\n%s" % [
@@ -320,6 +362,17 @@ func update_status(prefix: String) -> void:
 		int(data.get("metatile_id", -1)),
 		control_http_status,
 	]
+	update_interaction_prompt()
+
+
+func update_interaction_prompt() -> void:
+	var nearest := nearest_interaction()
+	if nearest.is_empty():
+		interaction_label.text = "Nearby: none"
+		return
+
+	var action := str(nearest.get("action", "use")).capitalize()
+	interaction_label.text = "Nearby: %s %s" % [action, str(nearest.get("name", ""))]
 
 
 func cell_text(cell: Vector2i) -> String:
@@ -488,16 +541,71 @@ func available_interactions(range := 1) -> Array:
 		if distance > range:
 			continue
 		var kind := str(landmark.get("kind", ""))
-		if kind != "sign" and kind != "doorway":
+		if kind != "sign" and kind != "doorway" and kind != "object":
 			continue
+		var action := "talk"
+		if kind == "sign":
+			action = "read"
+		elif kind == "doorway":
+			action = "enter"
 		interactions.append({
 			"target_id": str(landmark.get("id", "")),
 			"kind": kind,
-			"action": "read" if kind == "sign" else "enter",
+			"action": action,
 			"name": str(landmark.get("name", "")),
 			"distance": distance,
 		})
 	return interactions
+
+
+func nearest_interaction() -> Dictionary:
+	var interactions := available_interactions()
+	var nearest := {}
+	var nearest_distance := 1000000
+	for interaction in interactions:
+		var distance := int(interaction.get("distance", 1000000))
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest = interaction
+	return nearest
+
+
+func perform_nearest_interaction() -> Dictionary:
+	var nearest := nearest_interaction()
+	if nearest.is_empty():
+		var result := {
+			"ok": true,
+			"accepted": false,
+			"message": "There is nothing to interact with nearby.",
+			"available_interactions": available_interactions(),
+		}
+		show_interaction_result(result)
+		return result
+
+	var result := interact_with_target(str(nearest.get("target_id", "")))
+	show_interaction_result(result)
+	return result
+
+
+func show_interaction_result(result: Dictionary) -> void:
+	if not bool(result.get("accepted", false)):
+		message_label.text = str(result.get("message", ""))
+		update_interaction_prompt()
+		return
+
+	match str(result.get("kind", "")):
+		"sign":
+			message_label.text = str(result.get("text", ""))
+		"object":
+			message_label.text = str(result.get("text", result.get("message", "")))
+		"doorway":
+			if str(result.get("result_type", "")) == "entered_loaded_doorway":
+				message_label.text = "Entered %s." % str(result.get("target_map", ""))
+			else:
+				message_label.text = str(result.get("message", "Doorway target is not loaded yet."))
+		_:
+			message_label.text = str(result.get("message", ""))
+	update_interaction_prompt()
 
 
 func interact_with_target(target_id: String) -> Dictionary:
@@ -525,6 +633,8 @@ func interact_with_target(target_id: String) -> Dictionary:
 	match kind:
 		"sign":
 			return interact_with_sign(landmark, distance)
+		"object":
+			return interact_with_object(landmark, distance)
 		"doorway":
 			return interact_with_doorway(landmark, distance)
 		_:
@@ -548,6 +658,24 @@ func interact_with_sign(landmark: Dictionary, distance: int) -> Dictionary:
 		"name": str(landmark.get("name", "")),
 		"distance": distance,
 		"text": sign_text_placeholder(landmark),
+		"text_symbol": str(landmark.get("text_symbol", "")),
+		"script": str(landmark.get("script", "")),
+	}
+
+
+func interact_with_object(landmark: Dictionary, distance: int) -> Dictionary:
+	var text := str(landmark.get("text", ""))
+	if text.is_empty():
+		text = "%s has nothing to say yet." % str(landmark.get("name", "Object"))
+	return {
+		"ok": true,
+		"accepted": true,
+		"target_id": str(landmark.get("id", "")),
+		"kind": "object",
+		"action": "talk",
+		"name": str(landmark.get("name", "")),
+		"distance": distance,
+		"text": text,
 		"text_symbol": str(landmark.get("text_symbol", "")),
 		"script": str(landmark.get("script", "")),
 	}
