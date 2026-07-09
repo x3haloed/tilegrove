@@ -556,6 +556,26 @@ func interact_with_sign(landmark: Dictionary, distance: int) -> Dictionary:
 func interact_with_doorway(landmark: Dictionary, distance: int) -> Dictionary:
 	var raw_target := str(landmark.get("target_map_raw", ""))
 	var target_map := map_constant_to_world_name(raw_target)
+	var target_loaded := not target_map.is_empty() and manifests.has(target_map)
+	if target_loaded:
+		var target_cell := target_warp_cell(target_map, int(landmark.get("dest_warp_id", 0)))
+		enter_map(target_map, target_cell, "entered doorway to")
+		return {
+			"ok": true,
+			"accepted": true,
+			"target_id": str(landmark.get("id", "")),
+			"kind": "doorway",
+			"action": "enter",
+			"name": str(landmark.get("name", "")),
+			"distance": distance,
+			"target_map_raw": raw_target,
+			"target_map": target_map,
+			"target_loaded": true,
+			"target_cell": cell_to_dict(target_cell),
+			"result_type": "entered_loaded_doorway",
+			"state": state_snapshot(),
+		}
+
 	return {
 		"ok": true,
 		"accepted": true,
@@ -566,10 +586,19 @@ func interact_with_doorway(landmark: Dictionary, distance: int) -> Dictionary:
 		"distance": distance,
 		"target_map_raw": raw_target,
 		"target_map": target_map,
-		"target_loaded": not target_map.is_empty() and manifests.has(target_map),
-		"result_type": "doorway_target_loaded" if not target_map.is_empty() and manifests.has(target_map) else "doorway_target_unloaded",
-		"message": "Doorway target is not loaded yet." if target_map.is_empty() or not manifests.has(target_map) else "Doorway target is loaded, but warp entry is not implemented yet.",
+		"target_loaded": false,
+		"result_type": "doorway_target_unloaded",
+		"message": "Doorway target is not loaded yet.",
 	}
+
+
+func target_warp_cell(target_map: String, warp_id: int) -> Vector2i:
+	var target_manifest: Dictionary = manifests[target_map]
+	var warps: Array = target_manifest.get("warp_events", [])
+	if warp_id >= 0 and warp_id < warps.size():
+		var warp: Dictionary = warps[warp_id]
+		return Vector2i(int(warp.get("x", 0)), int(warp.get("y", 0)))
+	return Vector2i.ZERO
 
 
 func sign_text_placeholder(landmark: Dictionary) -> String:

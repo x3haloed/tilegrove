@@ -7,6 +7,10 @@ from pathlib import Path
 
 from generate_pokeemerald_map import TILESET_PATHS, generate_map, map_slug, read_json
 
+SEED_TILESET_PAIRS = {
+    ("gTileset_General", "gTileset_Petalburg"),
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -30,8 +34,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def map_constant(map_name: str) -> str:
-    return "MAP_" + map_slug(map_name).upper()
+def map_constant_name(map_name: str) -> str:
+    parts = []
+    previous = ""
+    for character in map_name:
+        if character == "_":
+            parts.append("_")
+        else:
+            if character.isupper() and previous and previous.islower():
+                parts.append("_")
+            parts.append(character.upper())
+        previous = character
+    return "MAP_" + "".join(parts)
+
+
+def map_constants(pokeemerald_root: Path) -> dict[str, str]:
+    groups = read_json(pokeemerald_root / "data/maps/map_groups.json")
+    constants = {}
+    for group_name in groups["group_order"]:
+        for map_name in groups[group_name]:
+            constants[map_constant_name(map_name)] = map_name
+    return constants
 
 
 def godot_res_path(path: Path) -> str:
@@ -44,7 +67,8 @@ def supported_maps(pokeemerald_root: Path) -> list[dict]:
         for layout in read_json(pokeemerald_root / "data/layouts/layouts.json")["layouts"]
     }
     supported_tilesets = set(TILESET_PATHS.keys())
-    maps = []
+    constants = map_constants(pokeemerald_root)
+    maps_by_name = {}
 
     for map_path in sorted((pokeemerald_root / "data/maps").glob("*/map.json")):
         map_name = map_path.parent.name
@@ -52,17 +76,39 @@ def supported_maps(pokeemerald_root: Path) -> list[dict]:
         layout = layouts.get(map_data.get("layout"))
         if layout is None:
             continue
-        if layout["primary_tileset"] not in supported_tilesets:
-            continue
-        if layout["secondary_tileset"] not in supported_tilesets:
-            continue
-        maps.append({
+        maps_by_name[map_name] = {
             "name": map_name,
             "data": map_data,
             "layout": layout,
-        })
+        }
 
-    return maps
+    selected_names = set()
+    for map_name, map_info in maps_by_name.items():
+        layout = map_info["layout"]
+        pair = (layout["primary_tileset"], layout["secondary_tileset"])
+        if pair in SEED_TILESET_PAIRS:
+            selected_names.add(map_name)
+
+    for map_name in list(selected_names):
+        for warp in maps_by_name[map_name]["data"].get("warp_events") or []:
+            target_name = constants.get(warp.get("dest_map", ""))
+            if not target_name or target_name not in maps_by_name:
+                continue
+            target_layout = maps_by_name[target_name]["layout"]
+            if target_layout["primary_tileset"] not in supported_tilesets:
+                continue
+            if target_layout["secondary_tileset"] not in supported_tilesets:
+                continue
+            selected_names.add(target_name)
+
+    ordered_names = []
+    groups = read_json(pokeemerald_root / "data/maps/map_groups.json")
+    for group_name in groups["group_order"]:
+        for map_name in groups[group_name]:
+            if map_name in selected_names:
+                ordered_names.append(map_name)
+
+    return [maps_by_name[map_name] for map_name in ordered_names]
 
 
 def build_registry(pokeemerald_root: Path, output_dir: Path, registry_output: Path) -> dict:
@@ -79,9 +125,11 @@ def build_registry(pokeemerald_root: Path, output_dir: Path, registry_output: Pa
             output_dir / f"{slug}.json",
         )
 
+    all_constants = map_constants(pokeemerald_root)
     constants = {
-        map_constant(map_name): map_name
-        for map_name in generated.keys()
+        raw_map: map_name
+        for raw_map, map_name in all_constants.items()
+        if map_name in generated
     }
 
     registry_maps = {}
@@ -101,7 +149,7 @@ def build_registry(pokeemerald_root: Path, output_dir: Path, registry_output: Pa
 
         registry_maps[map_name] = {
             "slug": result["slug"],
-            "constant": map_constant(map_name),
+            "constant": map_constant_name(map_name),
             "manifest_path": godot_res_path(Path(result["manifest_path"])),
             "texture_path": godot_res_path(Path(result["output_path"])),
             "layout": manifest["layout"],

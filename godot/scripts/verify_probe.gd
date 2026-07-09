@@ -36,8 +36,8 @@ func _run() -> void:
 		push_error("Expected start cell to be passable.")
 		quit(1)
 		return
-	if root.map_registry.size() != 6:
-		push_error("Expected six registry-backed maps, got %d." % root.map_registry.size())
+	if root.map_registry.size() != 20:
+		push_error("Expected twenty registry-backed maps with first-ring interiors, got %d." % root.map_registry.size())
 		quit(1)
 		return
 	var look: Dictionary = root.look_snapshot(4)
@@ -72,11 +72,24 @@ func _run() -> void:
 		push_error("Expected doorway interaction to be accepted.")
 		quit(1)
 		return
+	if str(doorway_result.get("result_type", "")) != "entered_loaded_doorway":
+		push_error("Expected doorway interaction to enter a loaded target map.")
+		quit(1)
+		return
+	if root.current_map_name != "LittlerootTown_ProfessorBirchsLab":
+		push_error("Expected Birch's lab after doorway interaction, got %s." % root.current_map_name)
+		quit(1)
+		return
+	var doorway_state: Dictionary = doorway_result.get("state", {})
+	if str(doorway_state.get("map", "")) != "LittlerootTown_ProfessorBirchsLab":
+		push_error("Expected doorway result state to report Birch's lab.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(10, 15), "verify"):
 		push_error("Expected LittlerootTown to be loaded before movement checks.")
 		quit(1)
 		return
-	print("interaction gate: sign and doorway interactions accepted")
+	print("interaction gate: sign text extracted and loaded doorway entered")
 	if not root.try_move(Vector2i.RIGHT):
 		push_error("Expected movement right from start to succeed.")
 		quit(1)

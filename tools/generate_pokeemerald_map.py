@@ -10,8 +10,16 @@ from PIL import Image
 
 
 TILESET_PATHS = {
+    "gTileset_Building": "data/tilesets/primary/building",
     "gTileset_General": "data/tilesets/primary/general",
+    "gTileset_BrendansMaysHouse": "data/tilesets/secondary/brendans_mays_house",
+    "gTileset_Cave": "data/tilesets/secondary/cave",
+    "gTileset_GenericBuilding": "data/tilesets/secondary/generic_building",
+    "gTileset_Lab": "data/tilesets/secondary/lab",
     "gTileset_Petalburg": "data/tilesets/secondary/petalburg",
+    "gTileset_PetalburgGym": "data/tilesets/secondary/petalburg_gym",
+    "gTileset_PokemonCenter": "data/tilesets/secondary/pokemon_center",
+    "gTileset_Shop": "data/tilesets/secondary/shop",
 }
 
 METATILE_BYTES = 16
@@ -49,10 +57,17 @@ def parse_args() -> argparse.Namespace:
 
 def map_slug(map_name: str) -> str:
     slug = []
-    for index, character in enumerate(map_name):
-        if character.isupper() and index > 0 and not map_name[index - 1].isupper():
+    previous = ""
+    for character in map_name:
+        if character == "_":
+            if slug and slug[-1] != "_":
+                slug.append("_")
+        elif character.isupper() and previous and previous.islower() and slug[-1] != "_":
             slug.append("_")
-        slug.append(character.lower())
+            slug.append(character.lower())
+        else:
+            slug.append(character.lower())
+        previous = character
     return "".join(slug)
 
 
@@ -335,7 +350,7 @@ def text_fields_for_script(script_texts: dict[str, dict], script: str) -> dict:
 
 def build_landmarks(map_data: dict, rows: list[list[dict]], script_texts: dict[str, dict]) -> list[dict]:
     landmarks = []
-    for index, connection in enumerate(map_data.get("connections", [])):
+    for index, connection in enumerate(map_data.get("connections") or []):
         direction = connection.get("direction", "")
         target = connection.get("map", "")
         landmarks.append({
@@ -348,7 +363,7 @@ def build_landmarks(map_data: dict, rows: list[list[dict]], script_texts: dict[s
             "offset": int(connection.get("offset", 0)),
         })
 
-    for index, warp in enumerate(map_data.get("warp_events", [])):
+    for index, warp in enumerate(map_data.get("warp_events") or []):
         target = warp.get("dest_map", "")
         landmarks.append({
             "id": f"warp_{index}_{warp.get('x', 0)}_{warp.get('y', 0)}",
@@ -359,7 +374,7 @@ def build_landmarks(map_data: dict, rows: list[list[dict]], script_texts: dict[s
             "dest_warp_id": str(warp.get("dest_warp_id", "")),
         })
 
-    for index, event in enumerate(map_data.get("bg_events", [])):
+    for index, event in enumerate(map_data.get("bg_events") or []):
         event_type = event.get("type", "background")
         script = event.get("script", "")
         landmark = {
@@ -372,7 +387,7 @@ def build_landmarks(map_data: dict, rows: list[list[dict]], script_texts: dict[s
         landmark.update(text_fields_for_script(script_texts, script))
         landmarks.append(landmark)
 
-    for index, event in enumerate(map_data.get("object_events", [])):
+    for index, event in enumerate(map_data.get("object_events") or []):
         graphics = event.get("graphics_id", "object")
         script = event.get("script", "")
         landmark = {
@@ -386,7 +401,7 @@ def build_landmarks(map_data: dict, rows: list[list[dict]], script_texts: dict[s
         landmark.update(text_fields_for_script(script_texts, script))
         landmarks.append(landmark)
 
-    for index, event in enumerate(map_data.get("coord_events", [])):
+    for index, event in enumerate(map_data.get("coord_events") or []):
         script = event.get("script", "")
         landmark = {
             "id": f"trigger_{index}_{event.get('x', 0)}_{event.get('y', 0)}",
@@ -444,11 +459,11 @@ def build_manifest(
         "metatile_size": METATILE_SIZE,
         "primary_tileset": layout["primary_tileset"],
         "secondary_tileset": layout["secondary_tileset"],
-        "connections": map_data.get("connections", []),
-        "object_events": map_data.get("object_events", []),
-        "warp_events": map_data.get("warp_events", []),
-        "coord_events": map_data.get("coord_events", []),
-        "bg_events": map_data.get("bg_events", []),
+        "connections": map_data.get("connections") or [],
+        "object_events": map_data.get("object_events") or [],
+        "warp_events": map_data.get("warp_events") or [],
+        "coord_events": map_data.get("coord_events") or [],
+        "bg_events": map_data.get("bg_events") or [],
         "landmarks": build_landmarks(map_data, rows, script_texts),
         "cells": rows,
     }
