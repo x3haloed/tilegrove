@@ -4,7 +4,7 @@ Tilegrove is a small shared, agent-legible Pokémon-map world built with Godot, 
 
 ## Architecture
 
-- rust/server is the authoritative SpacetimeDB module. It owns player identities and positions, validates movement against seeded map collision/connections, resolves doorway transitions, and advances deterministic NPC state on a scheduled tick.
+- rust/server is the authoritative SpacetimeDB module. It owns player identities and positions, validates movement against seeded map collision/connections, resolves doorway transitions, and advances probabilistic NPC state on a scheduled tick. Moving NPCs leave a bounded authoritative trail, so absence has legible history without unbounded event growth.
 - rust/client is the Godot GDExtension client. It stores profile-specific credentials, calls reducers, subscribes to public tables, and exposes replicated state to GDScript.
 - godot remains every human or agent participant's body. It owns input, rendering, animation, screenshots, and the semantic loopback HTTP/SSE interface.
 - rust/xtask is the repeatable development workflow. Generated SpacetimeDB Rust bindings live in rust/client/generated and must not be edited by hand.

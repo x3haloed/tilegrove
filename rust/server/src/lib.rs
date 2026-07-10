@@ -7,6 +7,7 @@ const CLIENT_PROTOCOL: u32 = 1;
 const START_MAP: &str = "LittlerootTown";
 const START_X: i32 = 10;
 const START_Y: i32 = 15;
+const TRAIL_LENGTH: u64 = 6;
 
 #[table(accessor = player, public)]
 pub struct Player {
@@ -60,6 +61,18 @@ pub struct NpcState {
     pub range_y: i32,
     pub revision: u64,
     pub updated_at: Timestamp,
+}
+
+#[table(accessor = world_trace, public)]
+pub struct WorldTrace {
+    #[primary_key]
+    pub key: String,
+    pub map_name: String,
+    pub source_id: String,
+    pub x: i32,
+    pub y: i32,
+    pub sequence: u64,
+    pub created_at: Timestamp,
 }
 
 #[table(accessor = world_tick_schedule, scheduled(world_tick))]
@@ -226,7 +239,7 @@ pub fn world_tick(ctx: &ReducerContext, _schedule: WorldTickSchedule) -> Result<
             (0, 1, "south"),
             (-1, 0, "west"),
         ];
-        let start = deterministic_direction(&npc);
+        let start = ctx.random::<u32>() as usize % directions.len();
         let mut destination = None;
         for offset in 0..directions.len() {
             let (dx, dy, facing) = directions[(start + offset) % directions.len()];
@@ -255,6 +268,7 @@ pub fn world_tick(ctx: &ReducerContext, _schedule: WorldTickSchedule) -> Result<
             break;
         }
         if let Some((x, y, facing)) = destination {
+            leave_trace(ctx, &npc);
             ctx.db.npc_state().key().update(NpcState {
                 x,
                 y,
@@ -266,6 +280,26 @@ pub fn world_tick(ctx: &ReducerContext, _schedule: WorldTickSchedule) -> Result<
         }
     }
     Ok(())
+}
+
+fn leave_trace(ctx: &ReducerContext, npc: &NpcState) {
+    let sequence = npc.revision + 1;
+    let slot = sequence % TRAIL_LENGTH;
+    let key = format!("{}:{}:{slot}", npc.map_name, npc.object_id);
+    let trace = WorldTrace {
+        key: key.clone(),
+        map_name: npc.map_name.clone(),
+        source_id: npc.object_id.clone(),
+        x: npc.x,
+        y: npc.y,
+        sequence,
+        created_at: ctx.timestamp,
+    };
+    if ctx.db.world_trace().key().find(&key).is_some() {
+        ctx.db.world_trace().key().update(trace);
+    } else {
+        ctx.db.world_trace().insert(trace);
+    }
 }
 
 fn seed_npcs(ctx: &ReducerContext, map_name: &str, manifest: &Value) {
@@ -331,13 +365,6 @@ fn initial_npc_facing(movement_type: &str) -> &'static str {
     } else {
         "south"
     }
-}
-
-fn deterministic_direction(npc: &NpcState) -> usize {
-    let hash = npc.key.bytes().fold(0usize, |value, byte| {
-        value.wrapping_mul(31).wrapping_add(byte as usize)
-    });
-    (hash + npc.revision as usize) % 4
 }
 
 #[reducer]

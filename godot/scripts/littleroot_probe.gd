@@ -31,6 +31,7 @@ const PLAYER_WALK_FRAMES := {
 
 @onready var map_sprite: Sprite2D = $LittlerootTownProbe
 @onready var object_markers: Node2D = $ObjectMarkers
+@onready var world_traces: Node2D = $WorldTraces
 @onready var other_players: Node2D = $OtherPlayers
 @onready var player_sprite: Sprite2D = $PlayerSprite
 @onready var player_marker: ColorRect = $PlayerMarker
@@ -181,6 +182,7 @@ func process_spacetime() -> void:
 	spacetime_ready = true
 	apply_spacetime_position(server_position)
 	apply_spacetime_npcs()
+	update_world_traces()
 	update_other_players()
 	process_smoke_client()
 
@@ -246,6 +248,30 @@ func apply_spacetime_npcs() -> void:
 			var landmark := find_landmark(object_id)
 			if not landmark.is_empty():
 				update_object_marker_node(landmark, state, false)
+
+
+func current_world_traces() -> Array:
+	if not spacetime_enabled or spacetime == null:
+		return []
+	return spacetime.traces_on_map(current_map_name)
+
+
+func update_world_traces() -> void:
+	var scale_factor: float = map_sprite.scale.x
+	for child in world_traces.get_children():
+		child.free()
+	for trace in current_world_traces():
+		var marker := Polygon2D.new()
+		var age: int = maxi(0, int(trace.get("sequence", 0)))
+		var alpha: float = 0.18 + float(age % 6) * 0.035
+		marker.color = Color(0.70, 0.52, 0.25, alpha)
+		marker.polygon = PackedVector2Array([
+			Vector2(5, 9), Vector2(9, 5), Vector2(13, 9), Vector2(9, 13),
+		])
+		marker.position = map_sprite.position + Vector2(
+			float(trace.get("x", 0)), float(trace.get("y", 0))
+		) * TILE_SIZE * scale_factor
+		world_traces.add_child(marker)
 
 
 func update_other_players() -> void:
@@ -1016,6 +1042,7 @@ func state_snapshot() -> Dictionary:
 		"nearby_semantic_cells": nearby_semantic_cells(),
 		"authority": authority_snapshot(),
 		"visible_players": spacetime.players() if spacetime_enabled and spacetime != null else [],
+		"world_traces": current_world_traces(),
 		"control": {
 			"host": CONTROL_HTTP_HOST,
 			"port": control_http_port,
@@ -1117,10 +1144,23 @@ func look_snapshot(radius := 4) -> Dictionary:
 		"cell_data": cell_data(player_cell),
 		"here": landmarks_near(player_cell, 0),
 		"nearby_landmarks": landmarks_near(player_cell, radius),
+		"nearby_traces": traces_near(player_cell, radius),
 		"available_interactions": available_interactions(),
 		"connections": connection_summaries(),
 		"warps_here": warps_at_cell(player_cell),
 	}
+
+
+func traces_near(cell: Vector2i, radius: int) -> Array:
+	var result := []
+	for trace in current_world_traces():
+		var trace_cell := Vector2i(int(trace.get("x", 0)), int(trace.get("y", 0)))
+		var distance: int = abs(cell.x - trace_cell.x) + abs(cell.y - trace_cell.y)
+		if distance <= radius:
+			var copy: Dictionary = trace.duplicate(true)
+			copy["distance"] = distance
+			result.append(copy)
+	return result
 
 
 func landmarks_near(cell: Vector2i, radius: int) -> Array:

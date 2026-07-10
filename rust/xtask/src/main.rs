@@ -199,8 +199,10 @@ fn smoke_two_clients() -> Result<(), String> {
         )?;
         let npcs = sql("SELECT object_id, revision FROM npc_state")?;
         require(&npcs, "object_0_16_10", "NPC authority")?;
+        let traces = sql("SELECT source_id, sequence FROM world_trace")?;
+        require(&traces, "object_0_16_10", "persistent NPC trails")?;
         println!(
-            "smoke two-clients: identities, replicated movement, 20-map authority, and NPC state verified"
+            "smoke two-clients: identities, replicated movement, 20-map authority, NPC state, and persistent trails verified"
         );
         Ok(())
     })();

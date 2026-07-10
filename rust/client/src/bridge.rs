@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use generated::{
     DbConnection, NpcState, NpcStateTableAccess, Player, PlayerPosition, PlayerPositionTableAccess,
-    PlayerTableAccess, WorldMapTableAccess, join_world, move_player, seed_world_map, use_doorway,
+    PlayerTableAccess, WorldMapTableAccess, WorldTrace, WorldTraceTableAccess, join_world,
+    move_player, seed_world_map, use_doorway,
 };
 use godot::prelude::*;
 use spacetimedb_sdk::{DbContext, Table, credentials};
@@ -83,6 +84,7 @@ impl TilegroveBridge {
                     "SELECT * FROM player_position",
                     "SELECT * FROM world_map",
                     "SELECT * FROM npc_state",
+                    "SELECT * FROM world_trace",
                 ]);
             })
             .build()
@@ -248,6 +250,24 @@ impl TilegroveBridge {
         }
         result
     }
+
+    #[func]
+    pub fn traces_on_map(&self, map_name: GString) -> Array<Dictionary<Variant, Variant>> {
+        let mut traces = self
+            .connection
+            .as_ref()
+            .map(|connection| {
+                connection
+                    .db
+                    .world_trace()
+                    .iter()
+                    .filter(|trace| trace.map_name == map_name.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        traces.sort_by_key(|trace| trace.sequence);
+        traces.iter().map(trace_dictionary).collect()
+    }
 }
 
 impl TilegroveBridge {
@@ -309,6 +329,20 @@ fn npc_dictionary(npc: &NpcState) -> Dictionary<Variant, Variant> {
     result.set(
         "updated_at_micros",
         npc.updated_at.to_micros_since_unix_epoch(),
+    );
+    result
+}
+
+fn trace_dictionary(trace: &WorldTrace) -> Dictionary<Variant, Variant> {
+    let mut result = Dictionary::new();
+    result.set("source_id", trace.source_id.clone());
+    result.set("map", trace.map_name.clone());
+    result.set("x", trace.x);
+    result.set("y", trace.y);
+    result.set("sequence", trace.sequence as i64);
+    result.set(
+        "created_at_micros",
+        trace.created_at.to_micros_since_unix_epoch(),
     );
     result
 }

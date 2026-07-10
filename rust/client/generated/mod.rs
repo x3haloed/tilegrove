@@ -19,6 +19,8 @@ pub mod use_doorway_reducer;
 pub mod world_map_table;
 pub mod world_map_type;
 pub mod world_tick_schedule_type;
+pub mod world_trace_table;
+pub mod world_trace_type;
 
 pub use join_world_reducer::join_world;
 pub use move_player_reducer::move_player;
@@ -33,6 +35,8 @@ pub use use_doorway_reducer::use_doorway;
 pub use world_map_table::*;
 pub use world_map_type::WorldMap;
 pub use world_tick_schedule_type::WorldTickSchedule;
+pub use world_trace_table::*;
+pub use world_trace_type::WorldTrace;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -115,6 +119,7 @@ pub struct DbUpdate {
     player: __sdk::TableUpdate<Player>,
     player_position: __sdk::TableUpdate<PlayerPosition>,
     world_map: __sdk::TableUpdate<WorldMap>,
+    world_trace: __sdk::TableUpdate<WorldTrace>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -135,6 +140,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "world_map" => db_update
                     .world_map
                     .append(world_map_table::parse_table_update(table_update)?),
+                "world_trace" => db_update
+                    .world_trace
+                    .append(world_trace_table::parse_table_update(table_update)?),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -173,6 +181,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.world_map = cache
             .apply_diff_to_table::<WorldMap>("world_map", &self.world_map)
             .with_updates_by_pk(|row| &row.map_name);
+        diff.world_trace = cache
+            .apply_diff_to_table::<WorldTrace>("world_trace", &self.world_trace)
+            .with_updates_by_pk(|row| &row.key);
 
         diff
     }
@@ -191,6 +202,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "world_map" => db_update
                     .world_map
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "world_trace" => db_update
+                    .world_trace
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -217,6 +231,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "world_map" => db_update
                     .world_map
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "world_trace" => db_update
+                    .world_trace
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
                         __sdk::InternalError::unknown_name("table", unknown, "QueryRows").into(),
@@ -236,6 +253,7 @@ pub struct AppliedDiff<'r> {
     player: __sdk::TableAppliedDiff<'r, Player>,
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
     world_map: __sdk::TableAppliedDiff<'r, WorldMap>,
+    world_trace: __sdk::TableAppliedDiff<'r, WorldTrace>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -257,6 +275,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<WorldMap>("world_map", &self.world_map, event);
+        callbacks.invoke_table_row_callbacks::<WorldTrace>("world_trace", &self.world_trace, event);
     }
 }
 
@@ -921,7 +940,13 @@ impl __sdk::SpacetimeModule for RemoteModule {
         player_table::register_table(client_cache);
         player_position_table::register_table(client_cache);
         world_map_table::register_table(client_cache);
+        world_trace_table::register_table(client_cache);
     }
-    const ALL_TABLE_NAMES: &'static [&'static str] =
-        &["npc_state", "player", "player_position", "world_map"];
+    const ALL_TABLE_NAMES: &'static [&'static str] = &[
+        "npc_state",
+        "player",
+        "player_position",
+        "world_map",
+        "world_trace",
+    ];
 }

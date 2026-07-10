@@ -18,6 +18,8 @@ scale = Vector2(1.8, 1.8)
 texture = ExtResource("1_littleroot_map")
 centered = false
 
+[node name="WorldTraces" type="Node2D" parent="."]
+
 [node name="ObjectMarkers" type="Node2D" parent="."]
 
 [node name="OtherPlayers" type="Node2D" parent="."]
