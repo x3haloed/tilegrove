@@ -124,6 +124,27 @@ func _run() -> void:
 		push_error("Expected wandering Twin NPC to complete a step to a new cell.")
 		quit(1)
 		return
+	var moved_twin_cell: Vector2i = twin_state.get("cell", twin_spawn)
+	var moved_twin_snapshot: Dictionary = {}
+	for nearby in root.landmarks_near(moved_twin_cell, 0):
+		if str(nearby.get("id", "")) == "object_0_16_10":
+			moved_twin_snapshot = nearby
+			break
+	if moved_twin_snapshot.is_empty() or moved_twin_snapshot.get("current_cell", {}) != root.cell_to_dict(moved_twin_cell):
+		push_error("Expected nearby semantics to expose the wandering NPC's current authoritative cell.")
+		quit(1)
+		return
+	root.player_cell = moved_twin_cell + Vector2i.LEFT
+	root.player_facing = "east"
+	var moved_twin_interaction: Dictionary = {}
+	for interaction in root.available_interactions():
+		if str(interaction.get("target_id", "")) == "object_0_16_10":
+			moved_twin_interaction = interaction
+			break
+	if moved_twin_interaction.is_empty() or moved_twin_interaction.get("current_cell", {}) != root.cell_to_dict(moved_twin_cell):
+		push_error("Expected talk interactions to expose the wandering NPC's current authoritative cell.")
+		quit(1)
+		return
 	if not root.enter_map("LittlerootTown", Vector2i(2, 10), "verify"):
 		push_error("Expected LittlerootTown to be loaded for non-talkable object check.")
 		quit(1)

@@ -1129,6 +1129,8 @@ func landmarks_near(cell: Vector2i, radius: int) -> Array:
 		var distance := landmark_distance(cell, landmark)
 		if distance <= radius:
 			var copy: Dictionary = landmark.duplicate(true)
+			if str(landmark.get("kind", "")) == "object":
+				copy["current_cell"] = cell_to_dict(object_current_cell(landmark))
 			copy["distance"] = distance
 			result.append(copy)
 	return result
@@ -1164,14 +1166,17 @@ func available_interactions(range := 1) -> Array:
 			action = "read"
 		elif kind == "doorway":
 			action = "enter"
-		interactions.append({
+		var interaction := {
 			"target_id": str(landmark.get("id", "")),
 			"kind": kind,
 			"action": action,
 			"name": str(landmark.get("name", "")),
 			"distance": distance,
 			"in_front": landmark_distance(player_cell + facing_delta(), landmark) == 0,
-		})
+		}
+		if kind == "object":
+			interaction["current_cell"] = cell_to_dict(object_current_cell(landmark))
+		interactions.append(interaction)
 	return interactions
 
 
