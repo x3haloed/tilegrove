@@ -89,6 +89,7 @@ Cargo.lock
 .spacetime-test-data/
 .spacetime-smoke-data/
 .tinygrove/
+.tilegrove/
 godot/bin/
 
 # Locally generated Pokemon-derived assets.

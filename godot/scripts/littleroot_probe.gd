@@ -145,7 +145,13 @@ func start_spacetime() -> void:
 	var profile := OS.get_environment("TILEGROVE_PROFILE")
 	if profile.strip_edges().is_empty():
 		profile = "human"
-	spacetime_enabled = spacetime.connect_local(profile)
+	var spacetime_uri := OS.get_environment("TILEGROVE_SPACETIME_URI")
+	var database := OS.get_environment("TILEGROVE_DATABASE")
+	if spacetime_uri.strip_edges().is_empty():
+		spacetime_uri = "http://127.0.0.1:3000"
+	if database.strip_edges().is_empty():
+		database = "tilegrove-dev"
+	spacetime_enabled = spacetime.connect_to(spacetime_uri, database, profile)
 	if not spacetime_enabled:
 		push_error("Could not connect to Tilegrove authority: %s" % spacetime.last_error())
 

@@ -58,9 +58,17 @@ The loopback port defaults to 38473 and scans upward if occupied. Override it wi
 
 Profiles use separate durable SpacetimeDB credentials:
 
-    TILEGROVE_PROFILE=agent-thimble \
-    TILEGROVE_PLAYER_NAME=Thimble \
-    TILEGROVE_CONTROL_PORT=38474 \
-    cargo xtask godot run
+    cargo xtask play --profile thimble --name Thimble
+
+The launcher gives every profile its own credentials, control port, and live runtime descriptor. It refuses to start the same profile twice, so multiple participants on one computer cannot silently cross credentials or control endpoints. Inspect active instances with:
+
+    cargo xtask players
+
+Connect a profile to another SpacetimeDB deployment without changing its identity:
+
+    cargo xtask play --profile thimble --name Thimble \
+      --uri https://example.invalid --database tilegrove
+
+Use `--port PORT` only when a stable explicit control port is needed; otherwise the launcher selects an available profile-derived port.
 
 Locally generated Pokémon-derived map and sprite assets remain ignored and are never published by this repository.
