@@ -5,8 +5,9 @@ use std::collections::HashMap;
 
 use generated::{
     DbConnection, NpcState, NpcStateTableAccess, Player, PlayerPosition, PlayerPositionTableAccess,
-    PlayerTableAccess, WorldMapTableAccess, WorldTrace, WorldTraceTableAccess, join_world,
-    move_player, seed_world_map, use_doorway,
+    PlayerPresenceTableAccess, PlayerTableAccess, WorldMapTableAccess, WorldTrace,
+    WorldTraceTableAccess, face_player, gesture_player, join_world, move_player, seed_world_map,
+    use_doorway,
 };
 use godot::prelude::*;
 use spacetimedb_sdk::{DbContext, Table, credentials};
@@ -82,6 +83,7 @@ impl TilegroveBridge {
                 ctx.subscription_builder().subscribe([
                     "SELECT * FROM player",
                     "SELECT * FROM player_position",
+                    "SELECT * FROM player_presence",
                     "SELECT * FROM world_map",
                     "SELECT * FROM npc_state",
                     "SELECT * FROM world_trace",
@@ -158,6 +160,16 @@ impl TilegroveBridge {
     }
 
     #[func]
+    pub fn face_player(&mut self, direction: GString) -> bool {
+        self.call(|connection| connection.reducers.face_player(direction.to_string()))
+    }
+
+    #[func]
+    pub fn gesture_player(&mut self, gesture: GString) -> bool {
+        self.call(|connection| connection.reducers.gesture_player(gesture.to_string()))
+    }
+
+    #[func]
     pub fn use_doorway(&mut self, target_id: GString) -> bool {
         self.call(|connection| connection.reducers.use_doorway(target_id.to_string()))
     }
@@ -225,11 +237,25 @@ impl TilegroveBridge {
             .iter()
             .map(|player| (player.identity.to_hex().to_string(), player))
             .collect::<HashMap<_, _>>();
+        let presences = connection
+            .db
+            .player_presence()
+            .iter()
+            .map(|presence| (presence.identity.to_hex().to_string(), presence))
+            .collect::<HashMap<_, _>>();
         for position in connection.db.player_position().iter() {
-            result.push(&position_dictionary(
+            let mut dictionary = position_dictionary(
                 players.get(&position.identity.to_hex().to_string()),
                 &position,
-            ));
+            );
+            if let Some(presence) = presences.get(&position.identity.to_hex().to_string()) {
+                dictionary.set("gesture", presence.gesture.clone());
+                dictionary.set("gesture_revision", presence.gesture_revision as i64);
+            } else {
+                dictionary.set("gesture", "");
+                dictionary.set("gesture_revision", 0i64);
+            }
+            result.push(&dictionary);
         }
         result
     }

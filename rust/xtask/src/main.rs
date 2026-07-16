@@ -499,6 +499,8 @@ fn smoke_two_clients() -> Result<(), String> {
         let positions = sql("SELECT * FROM player_position")?;
         require(&positions, "LittlerootTown", "position replication")?;
         require(&positions, "1", "authoritative movement revision")?;
+        let presences = sql("SELECT gesture_revision FROM player_presence")?;
+        require(&presences, "0", "player presence replication")?;
         let maps = sql("SELECT map_name FROM world_map")?;
         require(
             &maps,
@@ -510,7 +512,7 @@ fn smoke_two_clients() -> Result<(), String> {
         let traces = sql("SELECT source_id, sequence FROM world_trace")?;
         require(&traces, "object_0_16_10", "persistent NPC trails")?;
         println!(
-            "smoke two-clients: identities, replicated movement, 20-map authority, NPC state, and persistent trails verified"
+            "smoke two-clients: identities, replicated movement and presence, 20-map authority, NPC state, and persistent trails verified"
         );
         Ok(())
     })();

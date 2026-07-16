@@ -6,12 +6,16 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+pub mod face_player_reducer;
+pub mod gesture_player_reducer;
 pub mod join_world_reducer;
 pub mod move_player_reducer;
 pub mod npc_state_table;
 pub mod npc_state_type;
 pub mod player_position_table;
 pub mod player_position_type;
+pub mod player_presence_table;
+pub mod player_presence_type;
 pub mod player_table;
 pub mod player_type;
 pub mod seed_world_map_reducer;
@@ -22,12 +26,16 @@ pub mod world_tick_schedule_type;
 pub mod world_trace_table;
 pub mod world_trace_type;
 
+pub use face_player_reducer::face_player;
+pub use gesture_player_reducer::gesture_player;
 pub use join_world_reducer::join_world;
 pub use move_player_reducer::move_player;
 pub use npc_state_table::*;
 pub use npc_state_type::NpcState;
 pub use player_position_table::*;
 pub use player_position_type::PlayerPosition;
+pub use player_presence_table::*;
+pub use player_presence_type::PlayerPresence;
 pub use player_table::*;
 pub use player_type::Player;
 pub use seed_world_map_reducer::seed_world_map;
@@ -46,6 +54,12 @@ pub use world_trace_type::WorldTrace;
 /// to indicate which reducer caused the event.
 
 pub enum Reducer {
+    FacePlayer {
+        direction: String,
+    },
+    GesturePlayer {
+        gesture: String,
+    },
     JoinWorld {
         display_name: String,
         client_protocol: u32,
@@ -70,6 +84,8 @@ impl __sdk::InModule for Reducer {
 impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
+            Reducer::FacePlayer { .. } => "face_player",
+            Reducer::GesturePlayer { .. } => "gesture_player",
             Reducer::JoinWorld { .. } => "join_world",
             Reducer::MovePlayer { .. } => "move_player",
             Reducer::SeedWorldMap { .. } => "seed_world_map",
@@ -80,6 +96,16 @@ impl __sdk::Reducer for Reducer {
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
+            Reducer::FacePlayer { direction } => {
+                __sats::bsatn::to_vec(&face_player_reducer::FacePlayerArgs {
+                    direction: direction.clone(),
+                })
+            }
+            Reducer::GesturePlayer { gesture } => {
+                __sats::bsatn::to_vec(&gesture_player_reducer::GesturePlayerArgs {
+                    gesture: gesture.clone(),
+                })
+            }
             Reducer::JoinWorld {
                 display_name,
                 client_protocol,
@@ -118,6 +144,7 @@ pub struct DbUpdate {
     npc_state: __sdk::TableUpdate<NpcState>,
     player: __sdk::TableUpdate<Player>,
     player_position: __sdk::TableUpdate<PlayerPosition>,
+    player_presence: __sdk::TableUpdate<PlayerPresence>,
     world_map: __sdk::TableUpdate<WorldMap>,
     world_trace: __sdk::TableUpdate<WorldTrace>,
 }
@@ -137,6 +164,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "player_position" => db_update
                     .player_position
                     .append(player_position_table::parse_table_update(table_update)?),
+                "player_presence" => db_update
+                    .player_presence
+                    .append(player_presence_table::parse_table_update(table_update)?),
                 "world_map" => db_update
                     .world_map
                     .append(world_map_table::parse_table_update(table_update)?),
@@ -178,6 +208,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.player_position = cache
             .apply_diff_to_table::<PlayerPosition>("player_position", &self.player_position)
             .with_updates_by_pk(|row| &row.identity);
+        diff.player_presence = cache
+            .apply_diff_to_table::<PlayerPresence>("player_presence", &self.player_presence)
+            .with_updates_by_pk(|row| &row.identity);
         diff.world_map = cache
             .apply_diff_to_table::<WorldMap>("world_map", &self.world_map)
             .with_updates_by_pk(|row| &row.map_name);
@@ -199,6 +232,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "player_position" => db_update
                     .player_position
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "player_presence" => db_update
+                    .player_presence
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "world_map" => db_update
                     .world_map
@@ -228,6 +264,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "player_position" => db_update
                     .player_position
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "player_presence" => db_update
+                    .player_presence
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "world_map" => db_update
                     .world_map
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -252,6 +291,7 @@ pub struct AppliedDiff<'r> {
     npc_state: __sdk::TableAppliedDiff<'r, NpcState>,
     player: __sdk::TableAppliedDiff<'r, Player>,
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
+    player_presence: __sdk::TableAppliedDiff<'r, PlayerPresence>,
     world_map: __sdk::TableAppliedDiff<'r, WorldMap>,
     world_trace: __sdk::TableAppliedDiff<'r, WorldTrace>,
     __unused: std::marker::PhantomData<&'r ()>,
@@ -272,6 +312,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<PlayerPosition>(
             "player_position",
             &self.player_position,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<PlayerPresence>(
+            "player_presence",
+            &self.player_presence,
             event,
         );
         callbacks.invoke_table_row_callbacks::<WorldMap>("world_map", &self.world_map, event);
@@ -531,19 +576,19 @@ impl __sdk::SubscriptionHandle for SubscriptionHandle {
 /// either a [`DbConnection`] or an [`EventContext`] and operate on either.
 pub trait RemoteDbContext:
     __sdk::DbContext<
-    DbView = RemoteTables,
-    Reducers = RemoteReducers,
-    SubscriptionBuilder = __sdk::SubscriptionBuilder<RemoteModule>,
->
+        DbView = RemoteTables,
+        Reducers = RemoteReducers,
+        SubscriptionBuilder = __sdk::SubscriptionBuilder<RemoteModule>,
+    >
 {
 }
 impl<
-        Ctx: __sdk::DbContext<
+    Ctx: __sdk::DbContext<
             DbView = RemoteTables,
             Reducers = RemoteReducers,
             SubscriptionBuilder = __sdk::SubscriptionBuilder<RemoteModule>,
         >,
-    > RemoteDbContext for Ctx
+> RemoteDbContext for Ctx
 {
 }
 
@@ -939,6 +984,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         npc_state_table::register_table(client_cache);
         player_table::register_table(client_cache);
         player_position_table::register_table(client_cache);
+        player_presence_table::register_table(client_cache);
         world_map_table::register_table(client_cache);
         world_trace_table::register_table(client_cache);
     }
@@ -946,6 +992,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "npc_state",
         "player",
         "player_position",
+        "player_presence",
         "world_map",
         "world_trace",
     ];

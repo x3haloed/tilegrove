@@ -32,6 +32,15 @@ pub struct PlayerPosition {
     pub updated_at: Timestamp,
 }
 
+#[table(accessor = player_presence, public)]
+pub struct PlayerPresence {
+    #[primary_key]
+    pub identity: Identity,
+    pub gesture: String,
+    pub gesture_revision: u64,
+    pub updated_at: Timestamp,
+}
+
 #[table(accessor = world_map, public)]
 pub struct WorldMap {
     #[primary_key]
@@ -160,6 +169,20 @@ pub fn join_world(
             y: START_Y,
             facing: "south".into(),
             revision: 0,
+            updated_at: ctx.timestamp,
+        });
+    }
+    if ctx
+        .db
+        .player_presence()
+        .identity()
+        .find(ctx.sender())
+        .is_none()
+    {
+        ctx.db.player_presence().insert(PlayerPresence {
+            identity: ctx.sender(),
+            gesture: String::new(),
+            gesture_revision: 0,
             updated_at: ctx.timestamp,
         });
     }
@@ -427,6 +450,57 @@ pub fn move_player(ctx: &ReducerContext, direction: String) -> Result<(), String
         ..position
     });
     Ok(())
+}
+
+#[reducer]
+pub fn face_player(ctx: &ReducerContext, direction: String) -> Result<(), String> {
+    require_player(ctx)?;
+    let position = ctx
+        .db
+        .player_position()
+        .identity()
+        .find(ctx.sender())
+        .ok_or_else(|| "Player position not found".to_string())?;
+    let facing = normalize_direction(&direction)?;
+    ctx.db.player_position().identity().update(PlayerPosition {
+        facing: facing.into(),
+        revision: position.revision + 1,
+        updated_at: ctx.timestamp,
+        ..position
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn gesture_player(ctx: &ReducerContext, gesture: String) -> Result<(), String> {
+    require_player(ctx)?;
+    let gesture = gesture.trim().to_ascii_lowercase();
+    if gesture != "wave" {
+        return Err("Unknown gesture; try wave".into());
+    }
+    let presence = ctx
+        .db
+        .player_presence()
+        .identity()
+        .find(ctx.sender())
+        .ok_or_else(|| "Player presence not found".to_string())?;
+    ctx.db.player_presence().identity().update(PlayerPresence {
+        gesture,
+        gesture_revision: presence.gesture_revision + 1,
+        updated_at: ctx.timestamp,
+        ..presence
+    });
+    Ok(())
+}
+
+fn normalize_direction(direction: &str) -> Result<&'static str, String> {
+    match direction.trim().to_ascii_lowercase().as_str() {
+        "north" | "up" => Ok("north"),
+        "south" | "down" => Ok("south"),
+        "west" | "left" => Ok("west"),
+        "east" | "right" => Ok("east"),
+        _ => Err("Unknown direction".into()),
+    }
 }
 
 #[reducer]

@@ -6,49 +6,46 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct JoinWorldArgs {
-    pub display_name: String,
-    pub client_protocol: u32,
+pub(super) struct GesturePlayerArgs {
+    pub gesture: String,
 }
 
-impl From<JoinWorldArgs> for super::Reducer {
-    fn from(args: JoinWorldArgs) -> Self {
-        Self::JoinWorld {
-            display_name: args.display_name,
-            client_protocol: args.client_protocol,
+impl From<GesturePlayerArgs> for super::Reducer {
+    fn from(args: GesturePlayerArgs) -> Self {
+        Self::GesturePlayer {
+            gesture: args.gesture,
         }
     }
 }
 
-impl __sdk::InModule for JoinWorldArgs {
+impl __sdk::InModule for GesturePlayerArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `join_world`.
+/// Extension trait for access to the reducer `gesture_player`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait join_world {
-    /// Request that the remote module invoke the reducer `join_world` to run as soon as possible.
+pub trait gesture_player {
+    /// Request that the remote module invoke the reducer `gesture_player` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`join_world:join_world_then`] to run a callback after the reducer completes.
-    fn join_world(&self, display_name: String, client_protocol: u32) -> __sdk::Result<()> {
-        self.join_world_then(display_name, client_protocol, |_, _| {})
+    /// /// Use [`gesture_player:gesture_player_then`] to run a callback after the reducer completes.
+    fn gesture_player(&self, gesture: String) -> __sdk::Result<()> {
+        self.gesture_player_then(gesture, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `join_world` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `gesture_player` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn join_world_then(
+    fn gesture_player_then(
         &self,
-        display_name: String,
-        client_protocol: u32,
+        gesture: String,
 
         callback: impl FnOnce(
             &super::ReducerEventContext,
@@ -58,11 +55,10 @@ pub trait join_world {
     ) -> __sdk::Result<()>;
 }
 
-impl join_world for super::RemoteReducers {
-    fn join_world_then(
+impl gesture_player for super::RemoteReducers {
+    fn gesture_player_then(
         &self,
-        display_name: String,
-        client_protocol: u32,
+        gesture: String,
 
         callback: impl FnOnce(
             &super::ReducerEventContext,
@@ -70,12 +66,7 @@ impl join_world for super::RemoteReducers {
         ) + Send
         + 'static,
     ) -> __sdk::Result<()> {
-        self.imp.invoke_reducer_with_callback(
-            JoinWorldArgs {
-                display_name,
-                client_protocol,
-            },
-            callback,
-        )
+        self.imp
+            .invoke_reducer_with_callback(GesturePlayerArgs { gesture }, callback)
     }
 }

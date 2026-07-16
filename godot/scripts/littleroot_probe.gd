@@ -20,6 +20,8 @@ const OBJECT_IDLE_SECONDS := 1.0
 const SSE_NPC_MOTION_SECONDS := 3.0
 const SSE_AMBIENT_SECONDS := 10.0
 const SSE_SILENCE_SECONDS := 3600.0
+const NEARBY_PLAYER_NAME_RADIUS := 7
+const PLAYER_GESTURE_VISIBLE_MSEC := 2200
 const PLAYER_FACE_FRAMES := {
 	"south": 0,
 	"north": 1,
@@ -69,6 +71,7 @@ var control_connections: Array[Dictionary] = []
 var control_http_port := 0
 var control_http_status := "control endpoint stopped"
 var interact_key_was_down := false
+var gesture_key_was_down := false
 var player_facing := "south"
 var player_is_stepping := false
 var player_step_elapsed := 0.0
@@ -92,6 +95,9 @@ var player_display_name := "Player"
 var human_connection_mode := false
 var connection_pending := false
 var ui_scale := UI_SCALE_DEFAULT
+var observed_players: Dictionary = {}
+var player_gesture_seen: Dictionary = {}
+var player_gesture_until: Dictionary = {}
 
 
 func _ready() -> void:
@@ -287,7 +293,14 @@ func _process(delta: float) -> void:
 		movement = Vector2i.DOWN
 
 	if movement != Vector2i.ZERO:
-		try_move(movement)
+		if Input.is_key_pressed(KEY_SHIFT):
+			face_direction(direction_name(movement))
+		else:
+			try_move(movement)
+	var gesture_key_down := Input.is_key_pressed(KEY_G)
+	if gesture_key_down and not gesture_key_was_down:
+		perform_gesture("wave")
+	gesture_key_was_down = gesture_key_down
 	if not player_is_stepping and interact_pressed():
 		perform_facing_interaction()
 	poll_control_http()
@@ -480,13 +493,17 @@ func update_other_players() -> void:
 	for child in other_players.get_children():
 		child.free()
 	var local_identity := str(spacetime.local_identity())
+	var current_observed: Dictionary = {}
 	for player in spacetime.players():
 		if str(player.get("identity", "")) == local_identity or str(player.get("map", "")) != current_map_name:
 			continue
+		var identity := str(player.get("identity", ""))
+		current_observed[identity] = player.duplicate(true)
+		observe_remote_player(identity, player)
 		var cell := Vector2(int(player.get("x", 0)), int(player.get("y", 0)))
 		if player_sprite.texture != null:
 			var sprite := Sprite2D.new()
-			sprite.name = "Player_%s" % str(player.get("identity", "")).substr(0, 8)
+			sprite.name = "Player_%s" % identity.substr(0, 8)
 			sprite.centered = false
 			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 			sprite.texture = player_sprite.texture
@@ -499,6 +516,56 @@ func update_other_players() -> void:
 			sprite.scale = map_sprite.scale
 			sprite.position = object_sprite_position(cell, sprite.texture)
 			other_players.add_child(sprite)
+			var distance: int = absi(int(cell.x) - player_cell.x) + absi(int(cell.y) - player_cell.y)
+			if distance <= NEARBY_PLAYER_NAME_RADIUS:
+				var label := Label.new()
+				label.text = str(player.get("display_name", identity.substr(0, 8)))
+				if int(player_gesture_until.get(identity, 0)) > Time.get_ticks_msec():
+					label.text += "  👋"
+				label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				label.add_theme_font_size_override("font_size", 8)
+				label.add_theme_color_override("font_color", Color(0.92, 0.98, 1.0))
+				label.add_theme_color_override("font_shadow_color", Color(0.05, 0.10, 0.16, 0.92))
+				label.add_theme_constant_override("shadow_offset_x", 1)
+				label.add_theme_constant_override("shadow_offset_y", 1)
+				label.position = sprite.position + Vector2(-34, -13) * map_sprite.scale
+				label.size = Vector2(84, 14) * map_sprite.scale
+				other_players.add_child(label)
+	for identity in observed_players.keys():
+		if not current_observed.has(identity):
+			var departed: Dictionary = observed_players[identity]
+			emit_sse_event("player_departed", {
+				"summary": "%s left view." % str(departed.get("display_name", "A player")),
+				"player": departed,
+			})
+	observed_players = current_observed
+
+
+func observe_remote_player(identity: String, player: Dictionary) -> void:
+	if not observed_players.has(identity):
+		emit_sse_event("player_arrived", {
+			"summary": "%s came into view at %s." % [str(player.get("display_name", "A player")), cell_text(Vector2i(int(player.get("x", 0)), int(player.get("y", 0))))],
+			"player": player,
+		})
+	else:
+		var before: Dictionary = observed_players[identity]
+		if int(before.get("revision", -1)) != int(player.get("revision", -1)):
+			var moved := int(before.get("x", 0)) != int(player.get("x", 0)) or int(before.get("y", 0)) != int(player.get("y", 0))
+			var kind := "player_moved_nearby" if moved else "player_turned_nearby"
+			emit_sse_event(kind, {
+				"summary": "%s %s %s." % [str(player.get("display_name", "A player")), "moved to" if moved else "turned", cell_text(Vector2i(int(player.get("x", 0)), int(player.get("y", 0)))) if moved else str(player.get("facing", ""))],
+				"player": player,
+				"previous": before,
+			})
+	var gesture_revision := int(player.get("gesture_revision", 0))
+	if gesture_revision > int(player_gesture_seen.get(identity, 0)):
+		player_gesture_seen[identity] = gesture_revision
+		player_gesture_until[identity] = Time.get_ticks_msec() + PLAYER_GESTURE_VISIBLE_MSEC
+		emit_sse_event("player_gesture", {
+			"summary": "%s waved." % str(player.get("display_name", "A player")),
+			"player": player,
+			"gesture": str(player.get("gesture", "wave")),
+		})
 
 
 func load_world_registry() -> void:
@@ -631,6 +698,38 @@ func move_direction(direction: String) -> Dictionary:
 		"target_cell": cell_to_dict(target),
 		"state": state_snapshot(),
 	}
+
+
+func face_direction(direction: String) -> Dictionary:
+	if direction_delta(direction) == Vector2i.ZERO:
+		return {"ok": false, "accepted": false, "message": "Unknown direction: %s" % direction}
+	var accepted := false
+	if spacetime_enabled:
+		accepted = spacetime_ready and bool(spacetime.face_player(direction))
+	else:
+		set_player_facing_from_delta(direction_delta(direction))
+		accepted = true
+	if accepted:
+		update_status("turned %s" % direction)
+	else:
+		update_status("turn rejected: %s" % spacetime.last_error())
+	return {"ok": true, "accepted": accepted, "direction": direction, "state": state_snapshot()}
+
+
+func perform_gesture(gesture: String) -> Dictionary:
+	var accepted := gesture == "wave"
+	if spacetime_enabled:
+		accepted = spacetime_ready and bool(spacetime.gesture_player(gesture))
+	if accepted:
+		update_status("waved")
+		emit_sse_event("player_gesture", {
+			"summary": "%s waved." % player_display_name,
+			"gesture": gesture,
+			"player": {"display_name": player_display_name, "map": current_map_name, "x": player_cell.x, "y": player_cell.y},
+		})
+	else:
+		update_status("gesture rejected")
+	return {"ok": true, "accepted": accepted, "gesture": gesture, "state": state_snapshot()}
 
 
 func direction_delta(direction: String) -> Vector2i:
@@ -1347,10 +1446,27 @@ func look_snapshot(radius := 4) -> Dictionary:
 		"here": landmarks_near(player_cell, 0),
 		"nearby_landmarks": landmarks_near(player_cell, radius),
 		"nearby_traces": traces_near(player_cell, radius),
+		"nearby_players": players_near(player_cell, radius),
 		"available_interactions": available_interactions(),
 		"connections": connection_summaries(),
 		"warps_here": warps_at_cell(player_cell),
 	}
+
+
+func players_near(cell: Vector2i, radius: int) -> Array:
+	var result := []
+	if not spacetime_enabled or spacetime == null:
+		return result
+	var local_identity := str(spacetime.local_identity())
+	for player in spacetime.players():
+		if str(player.get("identity", "")) == local_identity or str(player.get("map", "")) != current_map_name:
+			continue
+		var distance: int = absi(cell.x - int(player.get("x", 0))) + absi(cell.y - int(player.get("y", 0)))
+		if distance <= radius:
+			var copy: Dictionary = player.duplicate(true)
+			copy["distance"] = distance
+			result.append(copy)
+	return result
 
 
 func traces_near(cell: Vector2i, radius: int) -> Array:
@@ -1819,6 +1935,8 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 					"GET /interactions": "Return sign and doorway interactions currently in range.",
 					"POST /interact": "Interact with JSON body like {\"target_id\":\"sign_0_15_13\"}.",
 					"POST /move": "Move with JSON body like {\"direction\":\"east\"}.",
+					"POST /face": "Turn in place with JSON body like {\"direction\":\"east\"}.",
+					"POST /gesture": "Gesture with JSON body like {\"gesture\":\"wave\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
 					"GET /stream": "Open a semantic server-sent event stream of visible world changes.",
 					"GET /screenshot": "Return the current Godot viewport as image/png.",
@@ -1879,6 +1997,16 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 				send_control_json(peer, 405, {"ok": false, "message": "Use POST /move or GET /move?direction=east."})
 			else:
 				send_control_json(peer, 200, control_move(request["body"], query))
+		"/face":
+			if method != "POST" and method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use POST /face or GET /face?direction=east."})
+			else:
+				send_control_json(peer, 200, control_face(request["body"], query))
+		"/gesture":
+			if method != "POST" and method != "GET":
+				send_control_json(peer, 405, {"ok": false, "message": "Use POST /gesture or GET /gesture?gesture=wave."})
+			else:
+				send_control_json(peer, 200, control_gesture(request["body"], query))
 		_:
 			if path.begins_with("/move/"):
 				send_control_json(peer, 200, move_direction(path.trim_prefix("/move/")))
@@ -2160,6 +2288,30 @@ func control_move(body: String, query: Dictionary) -> Dictionary:
 			"state": state_snapshot(),
 		}
 	return move_direction(direction)
+
+
+func control_face(body: String, query: Dictionary) -> Dictionary:
+	var direction := str(query.get("direction", query.get("dir", "")))
+	if direction.is_empty() and not body.strip_edges().is_empty():
+		var parsed := parse_json_body(body)
+		if not bool(parsed.get("ok", true)):
+			return parsed
+		direction = str(parsed.get("direction", parsed.get("dir", "")))
+	if direction.is_empty():
+		return {"ok": false, "accepted": false, "message": "Missing direction."}
+	return face_direction(direction)
+
+
+func control_gesture(body: String, query: Dictionary) -> Dictionary:
+	var gesture := str(query.get("gesture", ""))
+	if gesture.is_empty() and not body.strip_edges().is_empty():
+		var parsed := parse_json_body(body)
+		if not bool(parsed.get("ok", true)):
+			return parsed
+		gesture = str(parsed.get("gesture", ""))
+	if gesture.is_empty():
+		return {"ok": false, "accepted": false, "message": "Missing gesture; try wave."}
+	return perform_gesture(gesture)
 
 
 func control_interact(body: String, query: Dictionary) -> Dictionary:
