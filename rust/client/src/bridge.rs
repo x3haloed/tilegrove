@@ -5,9 +5,9 @@ use std::collections::HashMap;
 
 use generated::{
     DbConnection, NpcState, NpcStateTableAccess, Player, PlayerPosition, PlayerPositionTableAccess,
-    PlayerPresenceTableAccess, PlayerTableAccess, WorldMapTableAccess, WorldTrace,
-    WorldTraceTableAccess, face_player, gesture_player, join_world, move_player, seed_world_map,
-    use_doorway,
+    PlayerPresenceTableAccess, PlayerTableAccess, WorldChatTableAccess, WorldMapTableAccess,
+    WorldTrace, WorldTraceTableAccess, face_player, gesture_player, join_world, move_player,
+    seed_world_map, send_world_chat, use_doorway,
 };
 use godot::prelude::*;
 use spacetimedb_sdk::{DbContext, Table, credentials};
@@ -84,6 +84,7 @@ impl TilegroveBridge {
                     "SELECT * FROM player",
                     "SELECT * FROM player_position",
                     "SELECT * FROM player_presence",
+                    "SELECT * FROM world_chat",
                     "SELECT * FROM world_map",
                     "SELECT * FROM npc_state",
                     "SELECT * FROM world_trace",
@@ -167,6 +168,11 @@ impl TilegroveBridge {
     #[func]
     pub fn gesture_player(&mut self, gesture: GString) -> bool {
         self.call(|connection| connection.reducers.gesture_player(gesture.to_string()))
+    }
+
+    #[func]
+    pub fn send_world_chat(&mut self, text: GString) -> bool {
+        self.call(|connection| connection.reducers.send_world_chat(text.to_string()))
     }
 
     #[func]
@@ -293,6 +299,37 @@ impl TilegroveBridge {
             .unwrap_or_default();
         traces.sort_by_key(|trace| trace.sequence);
         traces.iter().map(trace_dictionary).collect()
+    }
+
+    #[func]
+    pub fn chat_messages(&self) -> Array<Dictionary<Variant, Variant>> {
+        let mut messages = self
+            .connection
+            .as_ref()
+            .map(|connection| connection.db.world_chat().iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        messages.sort_by_key(|message| message.sequence);
+        messages
+            .iter()
+            .rev()
+            .take(50)
+            .rev()
+            .map(|message| {
+                let mut result = Dictionary::new();
+                result.set("sequence", message.sequence as i64);
+                result.set("sender", message.sender.to_hex().to_string());
+                result.set("display_name", message.display_name.clone());
+                result.set("map", message.map_name.clone());
+                result.set("x", message.x);
+                result.set("y", message.y);
+                result.set("text", message.text.clone());
+                result.set(
+                    "created_at_micros",
+                    message.created_at.to_micros_since_unix_epoch(),
+                );
+                result
+            })
+            .collect()
     }
 }
 

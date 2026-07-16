@@ -501,6 +501,9 @@ fn smoke_two_clients() -> Result<(), String> {
         require(&positions, "1", "authoritative movement revision")?;
         let presences = sql("SELECT gesture_revision FROM player_presence")?;
         require(&presences, "0", "player presence replication")?;
+        let chat = sql("SELECT display_name, text FROM world_chat")?;
+        require(&chat, "Alice says hello", "world chat replication")?;
+        require(&chat, "Bob says hello", "world chat replication")?;
         let maps = sql("SELECT map_name FROM world_map")?;
         require(
             &maps,
@@ -542,6 +545,7 @@ fn wait_for_server(server: &mut Child, timeout: Duration) -> Result<(), String> 
 }
 
 fn smoke_client(profile: &str, name: &str, direction: &str, port: &str) -> Result<Child, String> {
+    let chat = format!("{name} says hello");
     spawn(
         "godot",
         ["--headless", "--path", "godot", "--quit-after", "30"],
@@ -551,6 +555,7 @@ fn smoke_client(profile: &str, name: &str, direction: &str, port: &str) -> Resul
             ("TILEGROVE_CONTROL_PORT", port),
             ("TILEGROVE_SMOKE", "1"),
             ("TILEGROVE_SMOKE_DIRECTION", direction),
+            ("TILEGROVE_SMOKE_CHAT", chat.as_str()),
         ],
     )
 }

@@ -41,6 +41,20 @@ pub struct PlayerPresence {
     pub updated_at: Timestamp,
 }
 
+#[table(accessor = world_chat, public)]
+pub struct WorldChat {
+    #[primary_key]
+    #[auto_inc]
+    pub sequence: u64,
+    pub sender: Identity,
+    pub display_name: String,
+    pub map_name: String,
+    pub x: i32,
+    pub y: i32,
+    pub text: String,
+    pub created_at: Timestamp,
+}
+
 #[table(accessor = world_map, public)]
 pub struct WorldMap {
     #[primary_key]
@@ -489,6 +503,32 @@ pub fn gesture_player(ctx: &ReducerContext, gesture: String) -> Result<(), Strin
         gesture_revision: presence.gesture_revision + 1,
         updated_at: ctx.timestamp,
         ..presence
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn send_world_chat(ctx: &ReducerContext, text: String) -> Result<(), String> {
+    let player = require_player(ctx)?;
+    let position = ctx
+        .db
+        .player_position()
+        .identity()
+        .find(ctx.sender())
+        .ok_or_else(|| "Player position not found".to_string())?;
+    let text = text.trim();
+    if text.is_empty() || text.len() > 280 {
+        return Err("Chat messages must contain 1 to 280 bytes".into());
+    }
+    ctx.db.world_chat().insert(WorldChat {
+        sequence: 0,
+        sender: ctx.sender(),
+        display_name: player.display_name,
+        map_name: position.map_name,
+        x: position.x,
+        y: position.y,
+        text: text.into(),
+        created_at: ctx.timestamp,
     });
     Ok(())
 }

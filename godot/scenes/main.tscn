@@ -59,6 +59,22 @@ offset_bottom = 420.0
 text = ""
 autowrap_mode = 3
 
+[node name="ChatLog" type="RichTextLabel" parent="."]
+offset_left = 704.0
+offset_top = 430.0
+offset_right = 1120.0
+offset_bottom = 550.0
+fit_content = false
+scroll_active = true
+
+[node name="ChatInput" type="LineEdit" parent="."]
+offset_left = 704.0
+offset_top = 558.0
+offset_right = 1120.0
+offset_bottom = 590.0
+placeholder_text = "Say something… (Enter)"
+max_length = 280
+
 [node name="PlayerMarker" type="ColorRect" parent="."]
 offset_left = 320.0
 offset_top = 320.0

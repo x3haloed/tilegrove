@@ -19,7 +19,10 @@ pub mod player_presence_type;
 pub mod player_table;
 pub mod player_type;
 pub mod seed_world_map_reducer;
+pub mod send_world_chat_reducer;
 pub mod use_doorway_reducer;
+pub mod world_chat_table;
+pub mod world_chat_type;
 pub mod world_map_table;
 pub mod world_map_type;
 pub mod world_tick_schedule_type;
@@ -39,7 +42,10 @@ pub use player_presence_type::PlayerPresence;
 pub use player_table::*;
 pub use player_type::Player;
 pub use seed_world_map_reducer::seed_world_map;
+pub use send_world_chat_reducer::send_world_chat;
 pub use use_doorway_reducer::use_doorway;
+pub use world_chat_table::*;
+pub use world_chat_type::WorldChat;
 pub use world_map_table::*;
 pub use world_map_type::WorldMap;
 pub use world_tick_schedule_type::WorldTickSchedule;
@@ -72,6 +78,9 @@ pub enum Reducer {
         map_constant: String,
         manifest_json: String,
     },
+    SendWorldChat {
+        text: String,
+    },
     UseDoorway {
         target_id: String,
     },
@@ -89,6 +98,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::JoinWorld { .. } => "join_world",
             Reducer::MovePlayer { .. } => "move_player",
             Reducer::SeedWorldMap { .. } => "seed_world_map",
+            Reducer::SendWorldChat { .. } => "send_world_chat",
             Reducer::UseDoorway { .. } => "use_doorway",
             _ => unreachable!(),
         }
@@ -127,6 +137,11 @@ impl __sdk::Reducer for Reducer {
                 map_constant: map_constant.clone(),
                 manifest_json: manifest_json.clone(),
             }),
+            Reducer::SendWorldChat { text } => {
+                __sats::bsatn::to_vec(&send_world_chat_reducer::SendWorldChatArgs {
+                    text: text.clone(),
+                })
+            }
             Reducer::UseDoorway { target_id } => {
                 __sats::bsatn::to_vec(&use_doorway_reducer::UseDoorwayArgs {
                     target_id: target_id.clone(),
@@ -145,6 +160,7 @@ pub struct DbUpdate {
     player: __sdk::TableUpdate<Player>,
     player_position: __sdk::TableUpdate<PlayerPosition>,
     player_presence: __sdk::TableUpdate<PlayerPresence>,
+    world_chat: __sdk::TableUpdate<WorldChat>,
     world_map: __sdk::TableUpdate<WorldMap>,
     world_trace: __sdk::TableUpdate<WorldTrace>,
 }
@@ -167,6 +183,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "player_presence" => db_update
                     .player_presence
                     .append(player_presence_table::parse_table_update(table_update)?),
+                "world_chat" => db_update
+                    .world_chat
+                    .append(world_chat_table::parse_table_update(table_update)?),
                 "world_map" => db_update
                     .world_map
                     .append(world_map_table::parse_table_update(table_update)?),
@@ -211,6 +230,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.player_presence = cache
             .apply_diff_to_table::<PlayerPresence>("player_presence", &self.player_presence)
             .with_updates_by_pk(|row| &row.identity);
+        diff.world_chat = cache
+            .apply_diff_to_table::<WorldChat>("world_chat", &self.world_chat)
+            .with_updates_by_pk(|row| &row.sequence);
         diff.world_map = cache
             .apply_diff_to_table::<WorldMap>("world_map", &self.world_map)
             .with_updates_by_pk(|row| &row.map_name);
@@ -235,6 +257,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "player_presence" => db_update
                     .player_presence
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "world_chat" => db_update
+                    .world_chat
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "world_map" => db_update
                     .world_map
@@ -267,6 +292,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "player_presence" => db_update
                     .player_presence
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "world_chat" => db_update
+                    .world_chat
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "world_map" => db_update
                     .world_map
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -292,6 +320,7 @@ pub struct AppliedDiff<'r> {
     player: __sdk::TableAppliedDiff<'r, Player>,
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
     player_presence: __sdk::TableAppliedDiff<'r, PlayerPresence>,
+    world_chat: __sdk::TableAppliedDiff<'r, WorldChat>,
     world_map: __sdk::TableAppliedDiff<'r, WorldMap>,
     world_trace: __sdk::TableAppliedDiff<'r, WorldTrace>,
     __unused: std::marker::PhantomData<&'r ()>,
@@ -319,6 +348,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.player_presence,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<WorldChat>("world_chat", &self.world_chat, event);
         callbacks.invoke_table_row_callbacks::<WorldMap>("world_map", &self.world_map, event);
         callbacks.invoke_table_row_callbacks::<WorldTrace>("world_trace", &self.world_trace, event);
     }
@@ -985,6 +1015,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         player_table::register_table(client_cache);
         player_position_table::register_table(client_cache);
         player_presence_table::register_table(client_cache);
+        world_chat_table::register_table(client_cache);
         world_map_table::register_table(client_cache);
         world_trace_table::register_table(client_cache);
     }
@@ -993,6 +1024,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "player",
         "player_position",
         "player_presence",
+        "world_chat",
         "world_map",
         "world_trace",
     ];

@@ -44,6 +44,8 @@ const PLAYER_WALK_FRAMES := {
 @onready var status_label: Label = $StatusLabel
 @onready var interaction_label: Label = $InteractionLabel
 @onready var message_label: Label = $MessageLabel
+@onready var chat_log: RichTextLabel = $ChatLog
+@onready var chat_input: LineEdit = $ChatInput
 @onready var connection_button: Button = $ConnectionButton
 @onready var connection_layer: CanvasLayer = $ConnectionLayer
 @onready var connection_profile: LineEdit = $ConnectionLayer/Panel/Margin/Fields/Profile
@@ -90,6 +92,8 @@ var spacetime_ready := false
 var spacetime_seed_queue: Array[String] = []
 var spacetime_revision := -1
 var smoke_move_sent := false
+var smoke_chat_sent := false
+var smoke_chat_frames := 0
 var smoke_start_revision := -1
 var player_display_name := "Player"
 var human_connection_mode := false
@@ -98,12 +102,16 @@ var ui_scale := UI_SCALE_DEFAULT
 var observed_players: Dictionary = {}
 var player_gesture_seen: Dictionary = {}
 var player_gesture_until: Dictionary = {}
+var chat_sequence := 0
+var chat_bubbles: Dictionary = {}
+var chat_bubble_until: Dictionary = {}
 
 
 func _ready() -> void:
 	load_world_manifests()
 	setup_connection_ui()
 	setup_settings_ui()
+	chat_input.text_submitted.connect(submit_chat)
 	configure_initial_connection()
 	load_player_sprite()
 	enter_map(current_map_name, player_cell, "ready")
@@ -143,6 +151,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_ESCAPE and settings_layer.visible:
 			hide_settings_panel()
 			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ENTER and not chat_input.has_focus() and not connection_layer.visible and not settings_layer.visible:
+			chat_input.grab_focus()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ESCAPE and chat_input.has_focus():
+			chat_input.release_focus()
+			get_viewport().set_input_as_handled()
 
 
 func show_settings_panel() -> void:
@@ -180,6 +194,10 @@ func layout_screen_ui() -> void:
 	interaction_label.size = Vector2(minf(416.0, viewport_size.x - 32.0), 54.0)
 	message_label.position = Vector2(maxf(16.0, right - 416.0), 242.0)
 	message_label.size = Vector2(minf(416.0, viewport_size.x - 32.0), maxf(54.0, bottom - 300.0))
+	chat_log.position = Vector2(maxf(16.0, right - 416.0), maxf(320.0, bottom - 198.0))
+	chat_log.size = Vector2(minf(416.0, viewport_size.x - 32.0), 120.0)
+	chat_input.position = Vector2(maxf(16.0, right - 416.0), bottom - 70.0)
+	chat_input.size = Vector2(minf(416.0, viewport_size.x - 32.0), 34.0)
 	connection_button.position = Vector2(right - 116.0, bottom - 34.0)
 	settings_button.position = Vector2(right - 238.0, bottom - 34.0)
 	var connection_shade := $ConnectionLayer/Shade as ColorRect
@@ -279,6 +297,10 @@ func _process(delta: float) -> void:
 	else:
 		update_authoritative_object_steps(delta)
 	if connection_layer.visible or settings_layer.visible:
+		poll_control_http()
+		process_sse(delta)
+		return
+	if chat_input.has_focus():
 		poll_control_http()
 		process_sse(delta)
 		return
@@ -391,6 +413,7 @@ func process_spacetime() -> void:
 	apply_spacetime_npcs()
 	update_world_traces()
 	update_other_players()
+	process_world_chat()
 	process_smoke_client()
 
 
@@ -410,7 +433,12 @@ func process_smoke_client() -> void:
 		smoke_move_sent = bool(spacetime.move_player(OS.get_environment("TILEGROVE_SMOKE_DIRECTION")))
 		return
 	if spacetime_revision > smoke_start_revision:
-		get_tree().quit(0)
+		if not smoke_chat_sent:
+			smoke_chat_sent = bool(spacetime.send_world_chat(OS.get_environment("TILEGROVE_SMOKE_CHAT")))
+			return
+		smoke_chat_frames += 1
+		if smoke_chat_frames >= 300:
+			get_tree().quit(0)
 
 
 func apply_spacetime_position(server_position: Dictionary) -> void:
@@ -522,6 +550,8 @@ func update_other_players() -> void:
 				label.text = str(player.get("display_name", identity.substr(0, 8)))
 				if int(player_gesture_until.get(identity, 0)) > Time.get_ticks_msec():
 					label.text += "  👋"
+				if int(chat_bubble_until.get(identity, 0)) > Time.get_ticks_msec():
+					label.text += "\n“%s”" % str(chat_bubbles.get(identity, ""))
 				label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 				label.add_theme_font_size_override("font_size", 8)
 				label.add_theme_color_override("font_color", Color(0.92, 0.98, 1.0))
@@ -539,6 +569,47 @@ func update_other_players() -> void:
 				"player": departed,
 			})
 	observed_players = current_observed
+
+
+func process_world_chat() -> void:
+	if not spacetime_enabled or spacetime == null:
+		return
+	var messages: Array = spacetime.chat_messages()
+	var lines := PackedStringArray()
+	for message in messages.slice(maxi(0, messages.size() - 8)):
+		lines.append("%s: %s" % [str(message.get("display_name", "Player")), str(message.get("text", ""))])
+		var sequence := int(message.get("sequence", 0))
+		if sequence <= chat_sequence:
+			continue
+		chat_sequence = sequence
+		var sender := str(message.get("sender", ""))
+		chat_bubbles[sender] = str(message.get("text", ""))
+		chat_bubble_until[sender] = Time.get_ticks_msec() + 5000
+		emit_sse_event("world_chat", {
+			"summary": "%s said: %s" % [str(message.get("display_name", "Player")), str(message.get("text", ""))],
+			"message": message,
+		})
+	chat_log.text = "\n".join(lines)
+	chat_log.scroll_to_line(maxi(0, lines.size() - 1))
+
+
+func submit_chat(text: String) -> void:
+	var result := send_chat(text)
+	if bool(result.get("accepted", false)):
+		chat_input.clear()
+	chat_input.release_focus()
+
+
+func send_chat(text: String) -> Dictionary:
+	text = text.strip_edges()
+	if text.is_empty():
+		return {"ok": false, "accepted": false, "message": "Chat message is empty."}
+	var accepted := spacetime_enabled and spacetime_ready and bool(spacetime.send_world_chat(text))
+	if accepted:
+		update_status("said: %s" % text)
+	else:
+		update_status("chat rejected: %s" % (spacetime.last_error() if spacetime != null else "not connected"))
+	return {"ok": true, "accepted": accepted, "text": text}
 
 
 func observe_remote_player(identity: String, player: Dictionary) -> void:
@@ -1937,6 +2008,7 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 					"POST /move": "Move with JSON body like {\"direction\":\"east\"}.",
 					"POST /face": "Turn in place with JSON body like {\"direction\":\"east\"}.",
 					"POST /gesture": "Gesture with JSON body like {\"gesture\":\"wave\"}.",
+					"POST /chat": "Chat with JSON body like {\"text\":\"Hello!\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
 					"GET /stream": "Open a semantic server-sent event stream of visible world changes.",
 					"GET /screenshot": "Return the current Godot viewport as image/png.",
@@ -2007,6 +2079,11 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 				send_control_json(peer, 405, {"ok": false, "message": "Use POST /gesture or GET /gesture?gesture=wave."})
 			else:
 				send_control_json(peer, 200, control_gesture(request["body"], query))
+		"/chat":
+			if method != "POST":
+				send_control_json(peer, 405, {"ok": false, "message": "Use POST /chat with JSON body {\"text\":\"Hello!\"}."})
+			else:
+				send_control_json(peer, 200, control_chat(request["body"]))
 		_:
 			if path.begins_with("/move/"):
 				send_control_json(peer, 200, move_direction(path.trim_prefix("/move/")))
@@ -2312,6 +2389,13 @@ func control_gesture(body: String, query: Dictionary) -> Dictionary:
 	if gesture.is_empty():
 		return {"ok": false, "accepted": false, "message": "Missing gesture; try wave."}
 	return perform_gesture(gesture)
+
+
+func control_chat(body: String) -> Dictionary:
+	var parsed := parse_json_body(body)
+	if not bool(parsed.get("ok", true)):
+		return parsed
+	return send_chat(str(parsed.get("text", "")))
 
 
 func control_interact(body: String, query: Dictionary) -> Dictionary:
