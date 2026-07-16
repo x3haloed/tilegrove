@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 
 const DB_NAME: &str = "tilegrove-dev";
 const LISTEN_ADDR: &str = "127.0.0.1:3000";
+const REMOTE_DB_NAME: &str = "tilegrove";
+const REMOTE_SERVER: &str = "maincloud";
+const REMOTE_URI: &str = "https://maincloud.spacetimedb.com";
 
 fn main() -> ExitCode {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -32,6 +35,8 @@ fn main() -> ExitCode {
         [cmd, sub] if cmd == "db" && sub == "build" => db_build(),
         [cmd, sub] if cmd == "db" && sub == "publish" => db_publish(),
         [cmd, sub] if cmd == "db" && sub == "generate" => db_generate(),
+        [cmd, sub] if cmd == "remote" && sub == "publish" => remote_publish(),
+        [cmd, sub] if cmd == "remote" && sub == "status" => remote_status(),
         [cmd, sub] if cmd == "client" && sub == "build" => client_build(),
         [cmd, sub] if cmd == "godot" && sub == "run" => godot_run(),
         [cmd, sub] if cmd == "smoke" && sub == "two-clients" => smoke_two_clients(),
@@ -55,6 +60,7 @@ Tilegrove repository tasks
   cargo xtask check
   cargo xtask verify
   cargo xtask db start|build|publish|generate
+  cargo xtask remote publish|status
   cargo xtask client build
   cargo xtask godot run
   cargo xtask play --profile NAME [--name DISPLAY] [--uri URI] [--database DB] [--port PORT]
@@ -142,6 +148,41 @@ fn db_generate() -> Result<(), String> {
         ],
         repo(),
     )
+}
+
+fn remote_publish() -> Result<(), String> {
+    run(
+        "spacetime",
+        [
+            "publish",
+            REMOTE_DB_NAME,
+            "--server",
+            REMOTE_SERVER,
+            "--module-path",
+            "rust/server",
+            "--delete-data=never",
+            "--yes",
+        ],
+        repo(),
+    )?;
+    remote_status()
+}
+
+fn remote_status() -> Result<(), String> {
+    let description = output(
+        "spacetime",
+        [
+            "describe",
+            REMOTE_DB_NAME,
+            "--server",
+            REMOTE_SERVER,
+            "--json",
+        ],
+        repo(),
+    )?;
+    require(&description, "player_position", "remote Tilegrove schema")?;
+    println!("remote Tilegrove authority is available at {REMOTE_URI} / {REMOTE_DB_NAME}");
+    Ok(())
 }
 fn client_build() -> Result<(), String> {
     run("cargo", ["build", "-p", "tilegrove-client"], repo())?;
