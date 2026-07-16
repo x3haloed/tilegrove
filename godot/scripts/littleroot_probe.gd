@@ -10,6 +10,7 @@ const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
 const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
 const PLAYER_SPRITE_PATH := "res://assets/pokeemerald/object_sprites/player.png"
 const PLAYER_FRAME_WIDTH := 16
+const CONNECTION_CONFIG_PATH := "user://tilegrove-connection.cfg"
 const PLAYER_STEP_DURATION_SECONDS := 0.16
 const OBJECT_STEP_DURATION_SECONDS := 0.32
 const OBJECT_IDLE_SECONDS := 1.0
@@ -38,6 +39,15 @@ const PLAYER_WALK_FRAMES := {
 @onready var status_label: Label = $StatusLabel
 @onready var interaction_label: Label = $InteractionLabel
 @onready var message_label: Label = $MessageLabel
+@onready var connection_button: Button = $ConnectionButton
+@onready var connection_layer: CanvasLayer = $ConnectionLayer
+@onready var connection_profile: LineEdit = $ConnectionLayer/Panel/Margin/Fields/Profile
+@onready var connection_display_name: LineEdit = $ConnectionLayer/Panel/Margin/Fields/DisplayName
+@onready var connection_uri: LineEdit = $ConnectionLayer/Panel/Margin/Fields/Uri
+@onready var connection_database: LineEdit = $ConnectionLayer/Panel/Margin/Fields/Database
+@onready var connection_status: Label = $ConnectionLayer/Panel/Margin/Fields/ConnectionStatus
+@onready var connection_cancel: Button = $ConnectionLayer/Panel/Margin/Fields/Actions/Cancel
+@onready var connection_connect: Button = $ConnectionLayer/Panel/Margin/Fields/Actions/Connect
 
 var world_registry: Dictionary = {}
 var map_registry: Dictionary = {}
@@ -70,16 +80,101 @@ var spacetime_seed_queue: Array[String] = []
 var spacetime_revision := -1
 var smoke_move_sent := false
 var smoke_start_revision := -1
+var player_display_name := "Player"
+var human_connection_mode := false
+var connection_pending := false
 
 
 func _ready() -> void:
 	load_world_manifests()
-	start_spacetime()
+	setup_connection_ui()
+	configure_initial_connection()
 	load_player_sprite()
 	enter_map(current_map_name, player_cell, "ready")
 	start_control_http()
 	update_player_marker()
 	update_status("ready")
+
+
+func setup_connection_ui() -> void:
+	connection_button.pressed.connect(show_connection_panel)
+	connection_cancel.pressed.connect(hide_connection_panel)
+	connection_connect.pressed.connect(connect_from_panel)
+	connection_layer.visible = false
+
+
+func configure_initial_connection() -> void:
+	if OS.get_environment("TILEGROVE_OFFLINE_VERIFY") == "1":
+		return
+	var profile := OS.get_environment("TILEGROVE_PROFILE").strip_edges()
+	if not profile.is_empty():
+		player_display_name = OS.get_environment("TILEGROVE_PLAYER_NAME").strip_edges()
+		if player_display_name.is_empty():
+			player_display_name = profile
+		start_spacetime(
+			profile,
+			connection_value("TILEGROVE_SPACETIME_URI", "http://127.0.0.1:3000"),
+			connection_value("TILEGROVE_DATABASE", "tilegrove-dev")
+		)
+		return
+
+	human_connection_mode = true
+	var config := ConfigFile.new()
+	if config.load(CONNECTION_CONFIG_PATH) == OK:
+		connection_profile.text = str(config.get_value("connection", "profile", ""))
+		connection_display_name.text = str(config.get_value("connection", "display_name", ""))
+		connection_uri.text = str(config.get_value("connection", "uri", "http://127.0.0.1:3000"))
+		connection_database.text = str(config.get_value("connection", "database", "tilegrove-dev"))
+	if connection_profile.text.strip_edges().is_empty():
+		show_connection_panel()
+	else:
+		connect_from_panel()
+
+
+func connection_value(environment_name: String, fallback: String) -> String:
+	var value := OS.get_environment(environment_name).strip_edges()
+	return fallback if value.is_empty() else value
+
+
+func show_connection_panel() -> void:
+	connection_layer.visible = true
+	connection_cancel.visible = spacetime_ready
+	connection_profile.grab_focus()
+
+
+func hide_connection_panel() -> void:
+	if spacetime_ready:
+		connection_layer.visible = false
+
+
+func connect_from_panel() -> void:
+	var profile := connection_profile.text.strip_edges().to_lower()
+	var display_name := connection_display_name.text.strip_edges()
+	var uri := connection_uri.text.strip_edges()
+	var database := connection_database.text.strip_edges()
+	if profile.is_empty() or not profile.is_valid_filename():
+		connection_status.text = "Choose a profile without path separators."
+		return
+	if display_name.is_empty():
+		display_name = profile
+		connection_display_name.text = display_name
+	if uri.is_empty() or database.is_empty():
+		connection_status.text = "Server and database are required."
+		return
+	player_display_name = display_name
+	connection_status.text = "Connecting as %s…" % display_name
+	connection_connect.disabled = true
+	connection_pending = true
+	if human_connection_mode:
+		var config := ConfigFile.new()
+		config.set_value("connection", "profile", profile)
+		config.set_value("connection", "display_name", display_name)
+		config.set_value("connection", "uri", uri)
+		config.set_value("connection", "database", database)
+		var save_error := config.save(CONNECTION_CONFIG_PATH)
+		if save_error != OK:
+			connection_status.text = "Could not remember connection settings (%s)." % error_string(save_error)
+	start_spacetime(profile, uri, database)
 
 
 func _process(delta: float) -> void:
@@ -135,25 +230,22 @@ func load_world_manifests() -> void:
 		manifest_jsons[map_name] = manifest_text
 
 
-func start_spacetime() -> void:
+func start_spacetime(profile: String, spacetime_uri: String, database: String) -> void:
 	if OS.get_environment("TILEGROVE_OFFLINE_VERIFY") == "1":
 		return
 	if not ClassDB.class_exists("TilegroveBridge"):
 		push_error("TilegroveBridge is unavailable; build the Rust client extension.")
 		return
 	spacetime = TilegroveBridge.new()
-	var profile := OS.get_environment("TILEGROVE_PROFILE")
-	if profile.strip_edges().is_empty():
-		profile = "human"
-	var spacetime_uri := OS.get_environment("TILEGROVE_SPACETIME_URI")
-	var database := OS.get_environment("TILEGROVE_DATABASE")
-	if spacetime_uri.strip_edges().is_empty():
-		spacetime_uri = "http://127.0.0.1:3000"
-	if database.strip_edges().is_empty():
-		database = "tilegrove-dev"
+	spacetime_join_sent = false
+	spacetime_ready = false
+	spacetime_seed_queue.clear()
+	spacetime_revision = -1
 	spacetime_enabled = spacetime.connect_to(spacetime_uri, database, profile)
 	if not spacetime_enabled:
-		push_error("Could not connect to Tilegrove authority: %s" % spacetime.last_error())
+		var failure := "Could not connect to Tilegrove authority: %s" % spacetime.last_error()
+		push_error(failure)
+		show_connection_failure(failure)
 
 
 func process_spacetime() -> void:
@@ -162,17 +254,21 @@ func process_spacetime() -> void:
 	spacetime.poll()
 	if not spacetime.is_connected():
 		spacetime_ready = false
+		if connection_pending and not str(spacetime.last_error()).is_empty():
+			show_connection_failure(str(spacetime.last_error()))
 		return
 	if not spacetime_join_sent:
-		var display_name := OS.get_environment("TILEGROVE_PLAYER_NAME")
-		if display_name.strip_edges().is_empty():
-			display_name = "Player"
-		spacetime_join_sent = spacetime.join_world(display_name)
+		spacetime_join_sent = spacetime.join_world(player_display_name)
 		return
 
 	var server_position: Dictionary = spacetime.local_position()
 	if server_position.is_empty():
 		return
+	if connection_pending:
+		connection_pending = false
+		connection_connect.disabled = false
+		connection_status.text = "Connected as %s." % player_display_name
+		connection_layer.visible = false
 	if spacetime_seed_queue.is_empty() and spacetime.world_map_count() < map_registry.size():
 		for map_name in map_registry.keys():
 			spacetime_seed_queue.append(str(map_name))
@@ -191,6 +287,14 @@ func process_spacetime() -> void:
 	update_world_traces()
 	update_other_players()
 	process_smoke_client()
+
+
+func show_connection_failure(message: String) -> void:
+	connection_pending = false
+	connection_connect.disabled = false
+	if human_connection_mode:
+		connection_status.text = "Connection failed: %s" % message
+		show_connection_panel()
 
 
 func process_smoke_client() -> void:

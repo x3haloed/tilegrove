@@ -31,6 +31,16 @@ func _run() -> void:
 
 	get_root().add_child(root)
 	await process_frame
+	var connection_layer := root.get_node_or_null("ConnectionLayer") as CanvasLayer
+	var connection_button := root.get_node_or_null("ConnectionButton") as Button
+	if connection_layer == null or connection_button == null:
+		push_error("Expected human connection controls to exist.")
+		quit(1)
+		return
+	if connection_layer.visible or not connection_button.visible:
+		push_error("Expected offline verification to keep the connection sheet dismissed and its menu affordance available.")
+		quit(1)
+		return
 
 	var player_sprite := root.get_node_or_null("PlayerSprite") as Sprite2D
 	var player_marker := root.get_node_or_null("PlayerMarker") as ColorRect

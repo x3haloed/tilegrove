@@ -66,3 +66,78 @@ offset_right = 348.0
 offset_bottom = 348.0
 visible = false
 color = Color(1, 0.16, 0.08, 0.32)
+
+[node name="ConnectionButton" type="Button" parent="."]
+offset_left = 1004.0
+offset_top = 594.0
+offset_right = 1120.0
+offset_bottom = 628.0
+text = "Connection…"
+
+[node name="ConnectionLayer" type="CanvasLayer" parent="."]
+layer = 20
+
+[node name="Shade" type="ColorRect" parent="ConnectionLayer"]
+offset_right = 1152.0
+offset_bottom = 648.0
+color = Color(0.025, 0.03, 0.035, 0.78)
+
+[node name="Panel" type="PanelContainer" parent="ConnectionLayer"]
+offset_left = 326.0
+offset_top = 108.0
+offset_right = 826.0
+offset_bottom = 540.0
+
+[node name="Margin" type="MarginContainer" parent="ConnectionLayer/Panel"]
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 24
+
+[node name="Fields" type="VBoxContainer" parent="ConnectionLayer/Panel/Margin"]
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="ConnectionLayer/Panel/Margin/Fields"]
+theme_override_font_sizes/font_size = 24
+text = "Enter Tilegrove"
+
+[node name="Explanation" type="Label" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "Choose a durable profile for this player. The connection sheet disappears once the grove has accepted you."
+autowrap_mode = 3
+
+[node name="ProfileLabel" type="Label" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "Profile"
+
+[node name="Profile" type="LineEdit" parent="ConnectionLayer/Panel/Margin/Fields"]
+placeholder_text = "chad"
+
+[node name="NameLabel" type="Label" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "Display name"
+
+[node name="DisplayName" type="LineEdit" parent="ConnectionLayer/Panel/Margin/Fields"]
+placeholder_text = "Chad"
+
+[node name="UriLabel" type="Label" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "SpacetimeDB server"
+
+[node name="Uri" type="LineEdit" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "http://127.0.0.1:3000"
+
+[node name="DatabaseLabel" type="Label" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "Database"
+
+[node name="Database" type="LineEdit" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "tilegrove-dev"
+
+[node name="ConnectionStatus" type="Label" parent="ConnectionLayer/Panel/Margin/Fields"]
+text = "Connection details stay on this computer."
+autowrap_mode = 3
+
+[node name="Actions" type="HBoxContainer" parent="ConnectionLayer/Panel/Margin/Fields"]
+alignment = 2
+
+[node name="Cancel" type="Button" parent="ConnectionLayer/Panel/Margin/Fields/Actions"]
+text = "Back"
+
+[node name="Connect" type="Button" parent="ConnectionLayer/Panel/Margin/Fields/Actions"]
+text = "Enter grove"

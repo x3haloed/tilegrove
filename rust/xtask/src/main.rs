@@ -444,7 +444,7 @@ fn smoke_two_clients() -> Result<(), String> {
         &[],
     )?;
     let result = (|| {
-        thread::sleep(Duration::from_millis(1200));
+        wait_for_server(&mut server, Duration::from_secs(15))?;
         db_publish()?;
         db_generate()?;
         client_build()?;
@@ -476,6 +476,26 @@ fn smoke_two_clients() -> Result<(), String> {
     stop_child(&mut server);
     let _ = fs::remove_dir_all(data_dir);
     result
+}
+
+fn wait_for_server(server: &mut Child, timeout: Duration) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = server.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!(
+                "SpacetimeDB server exited before becoming ready: {status}"
+            ));
+        }
+        if std::net::TcpStream::connect(LISTEN_ADDR).is_ok() {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "SpacetimeDB server did not listen on {LISTEN_ADDR} within {timeout:?}"
+            ));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn smoke_client(profile: &str, name: &str, direction: &str, port: &str) -> Result<Child, String> {
