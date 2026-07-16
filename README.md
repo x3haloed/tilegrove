@@ -80,4 +80,6 @@ The publish command targets `https://maincloud.spacetimedb.com / tilegrove`, ref
 
 Human players can launch Godot normally. The first launch presents a connection sheet for profile, display name, server, and database. Tilegrove remembers those settings locally and dismisses the sheet after the authority has accepted the player; use the small **Connection…** button to change them later. A failed connection brings the sheet back with the reported error instead of leaving the player in an ambiguous offline state.
 
+Use **Scale…** or F1 to adjust the whole view from 1x to 2x for high-density displays; the choice is remembered locally and never changes shared world coordinates.
+
 Locally generated Pokémon-derived map and sprite assets remain ignored and are never published by this repository.

@@ -11,6 +11,9 @@ const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
 const PLAYER_SPRITE_PATH := "res://assets/pokeemerald/object_sprites/player.png"
 const PLAYER_FRAME_WIDTH := 16
 const CONNECTION_CONFIG_PATH := "user://tilegrove-connection.cfg"
+const UI_SCALE_MIN := 1.0
+const UI_SCALE_MAX := 2.0
+const UI_SCALE_DEFAULT := 1.0
 const PLAYER_STEP_DURATION_SECONDS := 0.16
 const OBJECT_STEP_DURATION_SECONDS := 0.32
 const OBJECT_IDLE_SECONDS := 1.0
@@ -48,6 +51,11 @@ const PLAYER_WALK_FRAMES := {
 @onready var connection_status: Label = $ConnectionLayer/Panel/Margin/Fields/ConnectionStatus
 @onready var connection_cancel: Button = $ConnectionLayer/Panel/Margin/Fields/Actions/Cancel
 @onready var connection_connect: Button = $ConnectionLayer/Panel/Margin/Fields/Actions/Connect
+@onready var settings_button: Button = $SettingsButton
+@onready var settings_layer: CanvasLayer = $SettingsLayer
+@onready var settings_scale: HSlider = $SettingsLayer/Panel/Margin/Fields/ScaleRow/Slider
+@onready var settings_scale_value: Label = $SettingsLayer/Panel/Margin/Fields/ScaleRow/Value
+@onready var settings_close: Button = $SettingsLayer/Panel/Margin/Fields/Close
 
 var world_registry: Dictionary = {}
 var map_registry: Dictionary = {}
@@ -83,11 +91,13 @@ var smoke_start_revision := -1
 var player_display_name := "Player"
 var human_connection_mode := false
 var connection_pending := false
+var ui_scale := UI_SCALE_DEFAULT
 
 
 func _ready() -> void:
 	load_world_manifests()
 	setup_connection_ui()
+	setup_settings_ui()
 	configure_initial_connection()
 	load_player_sprite()
 	enter_map(current_map_name, player_cell, "ready")
@@ -101,6 +111,83 @@ func setup_connection_ui() -> void:
 	connection_cancel.pressed.connect(hide_connection_panel)
 	connection_connect.pressed.connect(connect_from_panel)
 	connection_layer.visible = false
+
+
+func setup_settings_ui() -> void:
+	get_window().wrap_controls = true
+	get_viewport().size_changed.connect(layout_screen_ui)
+	settings_button.pressed.connect(show_settings_panel)
+	settings_close.pressed.connect(hide_settings_panel)
+	settings_scale.value_changed.connect(apply_ui_scale)
+	settings_layer.visible = false
+	var config := ConfigFile.new()
+	if config.load(CONNECTION_CONFIG_PATH) == OK:
+		ui_scale = float(config.get_value("display", "ui_scale", UI_SCALE_DEFAULT))
+	apply_ui_scale(ui_scale)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F1:
+			if settings_layer.visible:
+				hide_settings_panel()
+			else:
+				show_settings_panel()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ESCAPE and settings_layer.visible:
+			hide_settings_panel()
+			get_viewport().set_input_as_handled()
+
+
+func show_settings_panel() -> void:
+	settings_layer.visible = true
+	settings_scale.grab_focus()
+
+
+func hide_settings_panel() -> void:
+	settings_layer.visible = false
+	settings_scale.release_focus()
+
+
+func apply_ui_scale(value: float) -> void:
+	ui_scale = clampf(value, UI_SCALE_MIN, UI_SCALE_MAX)
+	get_window().content_scale_factor = ui_scale
+	get_window().child_controls_changed()
+	settings_scale.set_value_no_signal(ui_scale)
+	settings_scale_value.text = "%.2fx" % ui_scale
+	layout_screen_ui()
+	var config := ConfigFile.new()
+	config.load(CONNECTION_CONFIG_PATH)
+	config.set_value("display", "ui_scale", ui_scale)
+	var save_error := config.save(CONNECTION_CONFIG_PATH)
+	if save_error != OK:
+		push_warning("Could not remember screen scale: %s" % error_string(save_error))
+
+
+func layout_screen_ui() -> void:
+	var viewport_size := get_viewport_rect().size
+	var right := viewport_size.x - 16.0
+	var bottom := viewport_size.y - 16.0
+	status_label.position = Vector2(maxf(16.0, right - 416.0), 56.0)
+	status_label.size = Vector2(minf(416.0, viewport_size.x - 32.0), 90.0)
+	interaction_label.position = Vector2(maxf(16.0, right - 416.0), 164.0)
+	interaction_label.size = Vector2(minf(416.0, viewport_size.x - 32.0), 54.0)
+	message_label.position = Vector2(maxf(16.0, right - 416.0), 242.0)
+	message_label.size = Vector2(minf(416.0, viewport_size.x - 32.0), maxf(54.0, bottom - 300.0))
+	connection_button.position = Vector2(right - 116.0, bottom - 34.0)
+	settings_button.position = Vector2(right - 238.0, bottom - 34.0)
+	var connection_shade := $ConnectionLayer/Shade as ColorRect
+	connection_shade.size = viewport_size
+	var connection_panel := $ConnectionLayer/Panel as PanelContainer
+	var connection_size := Vector2(minf(500.0, viewport_size.x - 32.0), minf(432.0, viewport_size.y - 32.0))
+	connection_panel.size = connection_size
+	connection_panel.position = (viewport_size - connection_size) * 0.5
+	var settings_shade := $SettingsLayer/Shade as ColorRect
+	settings_shade.size = viewport_size
+	var settings_panel := $SettingsLayer/Panel as PanelContainer
+	var settings_size := Vector2(minf(400.0, viewport_size.x - 32.0), minf(196.0, viewport_size.y - 32.0))
+	settings_panel.size = settings_size
+	settings_panel.position = (viewport_size - settings_size) * 0.5
 
 
 func configure_initial_connection() -> void:
@@ -167,6 +254,7 @@ func connect_from_panel() -> void:
 	connection_pending = true
 	if human_connection_mode:
 		var config := ConfigFile.new()
+		config.load(CONNECTION_CONFIG_PATH)
 		config.set_value("connection", "profile", profile)
 		config.set_value("connection", "display_name", display_name)
 		config.set_value("connection", "uri", uri)
@@ -184,6 +272,10 @@ func _process(delta: float) -> void:
 		update_object_steps(delta)
 	else:
 		update_authoritative_object_steps(delta)
+	if connection_layer.visible or settings_layer.visible:
+		poll_control_http()
+		process_sse(delta)
+		return
 	var movement := Vector2i.ZERO
 	if not player_is_stepping and Input.is_action_just_pressed("ui_left"):
 		movement = Vector2i.LEFT

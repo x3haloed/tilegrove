@@ -33,8 +33,14 @@ func _run() -> void:
 	await process_frame
 	var connection_layer := root.get_node_or_null("ConnectionLayer") as CanvasLayer
 	var connection_button := root.get_node_or_null("ConnectionButton") as Button
-	if connection_layer == null or connection_button == null:
+	var settings_layer := root.get_node_or_null("SettingsLayer") as CanvasLayer
+	var settings_scale := root.get_node_or_null("SettingsLayer/Panel/Margin/Fields/ScaleRow/Slider") as HSlider
+	if connection_layer == null or connection_button == null or settings_layer == null or settings_scale == null:
 		push_error("Expected human connection controls to exist.")
+		quit(1)
+		return
+	if settings_layer.visible or float(settings_scale.value) < 1.0 or float(settings_scale.value) > 2.0:
+		push_error("Expected the remembered screen scale to remain in the supported range with its settings sheet dismissed.")
 		quit(1)
 		return
 	if connection_layer.visible or not connection_button.visible:
