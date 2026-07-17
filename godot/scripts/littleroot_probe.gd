@@ -2094,7 +2094,7 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 	return false
 
 
-func start_sse_connection(peer: StreamPeerTCP, _query: Dictionary) -> void:
+func start_sse_connection(peer: StreamPeerTCP, query: Dictionary) -> void:
 	var header_text := "\r\n".join([
 		"HTTP/1.1 200 OK",
 		"Content-Type: text/event-stream; charset=utf-8",
@@ -2105,7 +2105,7 @@ func start_sse_connection(peer: StreamPeerTCP, _query: Dictionary) -> void:
 		"",
 	])
 	peer.put_data(header_text.to_utf8_buffer())
-	sse_connections.append({"peer": peer})
+	sse_connections.append({"peer": peer, "attention_only": str(query.get("attention", "0")) == "1"})
 	send_sse_event(peer, "hello", stream_hello_details())
 
 
@@ -2169,6 +2169,8 @@ func emit_sse_event(kind: String, details: Dictionary) -> void:
 	var closed: Array[Dictionary] = []
 	for connection in sse_connections:
 		var peer: StreamPeerTCP = connection["peer"]
+		if bool(connection.get("attention_only", false)) and kind in ["ambient_status", "silence", "npc_motion"]:
+			continue
 		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
 			closed.append(connection)
 			continue
