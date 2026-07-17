@@ -8,6 +8,10 @@ const START_MAP: &str = "LittlerootTown";
 const START_X: i32 = 10;
 const START_Y: i32 = 15;
 const TRAIL_LENGTH: u64 = 6;
+const BIRCH_BOARD_ID: &str = "birch_lab_change_board";
+const BIRCH_LAB_MAP: &str = "LittlerootTown_ProfessorBirchsLab";
+const BIRCH_BOARD_X: i32 = 7;
+const BIRCH_BOARD_Y: i32 = 1;
 
 #[table(accessor = player, public)]
 pub struct Player {
@@ -53,6 +57,26 @@ pub struct WorldChat {
     pub y: i32,
     pub text: String,
     pub created_at: Timestamp,
+}
+
+#[table(accessor = board_note, public)]
+pub struct BoardNote {
+    #[primary_key]
+    #[auto_inc]
+    pub note_id: u64,
+    pub board_id: String,
+    pub author: Identity,
+    pub author_name: String,
+    pub title: String,
+    pub body: String,
+    pub status: String,
+    pub claimant: Option<Identity>,
+    pub claimant_name: String,
+    pub resolution: String,
+    pub last_actor: Identity,
+    pub last_actor_name: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 #[table(accessor = world_map, public)]
@@ -531,6 +555,149 @@ pub fn send_world_chat(ctx: &ReducerContext, text: String) -> Result<(), String>
         created_at: ctx.timestamp,
     });
     Ok(())
+}
+
+#[reducer]
+pub fn post_board_note(
+    ctx: &ReducerContext,
+    board_id: String,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    let player = require_board_access(ctx, &board_id)?;
+    let title = bounded_text(&title, "Title", 1, 100)?;
+    let body = bounded_text(&body, "Body", 1, 2000)?;
+    ctx.db.board_note().insert(BoardNote {
+        note_id: 0,
+        board_id,
+        author: ctx.sender(),
+        author_name: player.display_name.clone(),
+        title,
+        body,
+        status: "open".into(),
+        claimant: None,
+        claimant_name: String::new(),
+        resolution: String::new(),
+        last_actor: ctx.sender(),
+        last_actor_name: player.display_name.clone(),
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn edit_board_note(
+    ctx: &ReducerContext,
+    note_id: u64,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    let note = require_note(ctx, note_id)?;
+    require_board_access(ctx, &note.board_id)?;
+    if note.author != ctx.sender() {
+        return Err("Only the author can edit this note".into());
+    }
+    let title = bounded_text(&title, "Title", 1, 100)?;
+    let body = bounded_text(&body, "Body", 1, 2000)?;
+    ctx.db.board_note().note_id().update(BoardNote {
+        title,
+        body,
+        last_actor: ctx.sender(),
+        last_actor_name: note.author_name.clone(),
+        updated_at: ctx.timestamp,
+        ..note
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn delete_board_note(ctx: &ReducerContext, note_id: u64) -> Result<(), String> {
+    let note = require_note(ctx, note_id)?;
+    require_board_access(ctx, &note.board_id)?;
+    if note.author != ctx.sender() {
+        return Err("Only the author can delete this note".into());
+    }
+    ctx.db.board_note().note_id().delete(note_id);
+    Ok(())
+}
+
+#[reducer]
+pub fn set_board_note_status(
+    ctx: &ReducerContext,
+    note_id: u64,
+    status: String,
+    resolution: String,
+) -> Result<(), String> {
+    let player = require_player(ctx)?;
+    let note = require_note(ctx, note_id)?;
+    require_board_access(ctx, &note.board_id)?;
+    let status = status.trim().to_ascii_lowercase();
+    if !matches!(status.as_str(), "open" | "claimed" | "done" | "declined") {
+        return Err("Status must be open, claimed, done, or declined".into());
+    }
+    let resolution = if resolution.trim().is_empty() {
+        String::new()
+    } else {
+        bounded_text(&resolution, "Resolution", 1, 1000)?
+    };
+    let (claimant, claimant_name) = match status.as_str() {
+        "claimed" => (Some(ctx.sender()), player.display_name.clone()),
+        "open" => (None, String::new()),
+        "done" | "declined" => {
+            if note.author != ctx.sender() && note.claimant != Some(ctx.sender()) {
+                return Err("Only the author or claimant can close this note".into());
+            }
+            (note.claimant, note.claimant_name.clone())
+        }
+        _ => unreachable!(),
+    };
+    ctx.db.board_note().note_id().update(BoardNote {
+        status,
+        claimant,
+        claimant_name,
+        resolution,
+        last_actor: ctx.sender(),
+        last_actor_name: player.display_name,
+        updated_at: ctx.timestamp,
+        ..note
+    });
+    Ok(())
+}
+
+fn bounded_text(text: &str, label: &str, min: usize, max: usize) -> Result<String, String> {
+    let text = text.trim();
+    if text.len() < min || text.len() > max {
+        return Err(format!("{label} must contain {min} to {max} bytes"));
+    }
+    Ok(text.into())
+}
+
+fn require_note(ctx: &ReducerContext, note_id: u64) -> Result<BoardNote, String> {
+    ctx.db
+        .board_note()
+        .note_id()
+        .find(note_id)
+        .ok_or_else(|| format!("Unknown board note {note_id}"))
+}
+
+fn require_board_access(ctx: &ReducerContext, board_id: &str) -> Result<Player, String> {
+    let player = require_player(ctx)?;
+    if board_id != BIRCH_BOARD_ID {
+        return Err("Unknown message board".into());
+    }
+    let position = ctx
+        .db
+        .player_position()
+        .identity()
+        .find(ctx.sender())
+        .ok_or_else(|| "Player position not found".to_string())?;
+    if position.map_name != BIRCH_LAB_MAP
+        || (position.x - BIRCH_BOARD_X).abs() + (position.y - BIRCH_BOARD_Y).abs() > 1
+    {
+        return Err("Stand beside Birch's Lab change board first".into());
+    }
+    Ok(player)
 }
 
 fn normalize_direction(direction: &str) -> Result<&'static str, String> {

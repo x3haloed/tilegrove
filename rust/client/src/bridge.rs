@@ -4,10 +4,11 @@ mod generated;
 use std::collections::HashMap;
 
 use generated::{
-    DbConnection, NpcState, NpcStateTableAccess, Player, PlayerPosition, PlayerPositionTableAccess,
-    PlayerPresenceTableAccess, PlayerTableAccess, WorldChatTableAccess, WorldMapTableAccess,
-    WorldTrace, WorldTraceTableAccess, face_player, gesture_player, join_world, move_player,
-    seed_world_map, send_world_chat, use_doorway,
+    BoardNoteTableAccess, DbConnection, NpcState, NpcStateTableAccess, Player, PlayerPosition,
+    PlayerPositionTableAccess, PlayerPresenceTableAccess, PlayerTableAccess, WorldChatTableAccess,
+    WorldMapTableAccess, WorldTrace, WorldTraceTableAccess, delete_board_note, edit_board_note,
+    face_player, gesture_player, join_world, move_player, post_board_note, seed_world_map,
+    send_world_chat, set_board_note_status, use_doorway,
 };
 use godot::prelude::*;
 use spacetimedb_sdk::{DbContext, Table, credentials};
@@ -85,6 +86,7 @@ impl TilegroveBridge {
                     "SELECT * FROM player_position",
                     "SELECT * FROM player_presence",
                     "SELECT * FROM world_chat",
+                    "SELECT * FROM board_note",
                     "SELECT * FROM world_map",
                     "SELECT * FROM npc_state",
                     "SELECT * FROM world_trace",
@@ -173,6 +175,47 @@ impl TilegroveBridge {
     #[func]
     pub fn send_world_chat(&mut self, text: GString) -> bool {
         self.call(|connection| connection.reducers.send_world_chat(text.to_string()))
+    }
+
+    #[func]
+    pub fn post_board_note(&mut self, board_id: GString, title: GString, body: GString) -> bool {
+        self.call(|connection| {
+            connection.reducers.post_board_note(
+                board_id.to_string(),
+                title.to_string(),
+                body.to_string(),
+            )
+        })
+    }
+
+    #[func]
+    pub fn edit_board_note(&mut self, note_id: i64, title: GString, body: GString) -> bool {
+        self.call(|connection| {
+            connection
+                .reducers
+                .edit_board_note(note_id as u64, title.to_string(), body.to_string())
+        })
+    }
+
+    #[func]
+    pub fn delete_board_note(&mut self, note_id: i64) -> bool {
+        self.call(|connection| connection.reducers.delete_board_note(note_id as u64))
+    }
+
+    #[func]
+    pub fn set_board_note_status(
+        &mut self,
+        note_id: i64,
+        status: GString,
+        resolution: GString,
+    ) -> bool {
+        self.call(|connection| {
+            connection.reducers.set_board_note_status(
+                note_id as u64,
+                status.to_string(),
+                resolution.to_string(),
+            )
+        })
     }
 
     #[func]
@@ -326,6 +369,55 @@ impl TilegroveBridge {
                 result.set(
                     "created_at_micros",
                     message.created_at.to_micros_since_unix_epoch(),
+                );
+                result
+            })
+            .collect()
+    }
+
+    #[func]
+    pub fn board_notes(&self, board_id: GString) -> Array<Dictionary<Variant, Variant>> {
+        let mut notes = self
+            .connection
+            .as_ref()
+            .map(|connection| {
+                connection
+                    .db
+                    .board_note()
+                    .iter()
+                    .filter(|note| note.board_id == board_id.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        notes.sort_by_key(|note| note.note_id);
+        notes
+            .iter()
+            .map(|note| {
+                let mut result = Dictionary::new();
+                result.set("note_id", note.note_id as i64);
+                result.set("board_id", note.board_id.clone());
+                result.set("author", note.author.to_hex().to_string());
+                result.set("author_name", note.author_name.clone());
+                result.set("title", note.title.clone());
+                result.set("body", note.body.clone());
+                result.set("status", note.status.clone());
+                result.set(
+                    "claimant",
+                    note.claimant
+                        .map(|identity| identity.to_hex().to_string())
+                        .unwrap_or_default(),
+                );
+                result.set("claimant_name", note.claimant_name.clone());
+                result.set("resolution", note.resolution.clone());
+                result.set("last_actor", note.last_actor.to_hex().to_string());
+                result.set("last_actor_name", note.last_actor_name.clone());
+                result.set(
+                    "created_at_micros",
+                    note.created_at.to_micros_since_unix_epoch(),
+                );
+                result.set(
+                    "updated_at_micros",
+                    note.updated_at.to_micros_since_unix_epoch(),
                 );
                 result
             })

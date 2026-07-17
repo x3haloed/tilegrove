@@ -21,6 +21,9 @@ const SSE_NPC_MOTION_SECONDS := 3.0
 const SSE_PLAYER_ACTIVITY_SECONDS := 0.75
 const SSE_AMBIENT_SECONDS := 10.0
 const SSE_SILENCE_SECONDS := 3600.0
+const BIRCH_BOARD_ID := "birch_lab_change_board"
+const BIRCH_BOARD_TARGET_ID := "bg_2_7_1"
+const BIRCH_BOARD_MAP := "LittlerootTown_ProfessorBirchsLab"
 const NEARBY_PLAYER_NAME_RADIUS := 7
 const PLAYER_GESTURE_VISIBLE_MSEC := 2200
 const PLAYER_FACE_FRAMES := {
@@ -108,12 +111,19 @@ var player_gesture_until: Dictionary = {}
 var chat_sequence := 0
 var chat_bubbles: Dictionary = {}
 var chat_bubble_until: Dictionary = {}
+var board_notes_seen: Dictionary = {}
+var board_layer: CanvasLayer
+var board_list: RichTextLabel
+var board_note_id: LineEdit
+var board_title: LineEdit
+var board_body: TextEdit
 
 
 func _ready() -> void:
 	load_world_manifests()
 	setup_connection_ui()
 	setup_settings_ui()
+	setup_board_ui()
 	chat_input.text_submitted.connect(submit_chat)
 	configure_initial_connection()
 	load_player_sprite()
@@ -143,6 +153,79 @@ func setup_settings_ui() -> void:
 	apply_ui_scale(ui_scale)
 
 
+func setup_board_ui() -> void:
+	board_layer = CanvasLayer.new()
+	board_layer.layer = 20
+	add_child(board_layer)
+	var shade := ColorRect.new()
+	shade.color = Color(0.02, 0.04, 0.03, 0.82)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	board_layer.add_child(shade)
+	var panel := PanelContainer.new()
+	panel.name = "Panel"
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.position = Vector2(-360, -260)
+	panel.size = Vector2(720, 520)
+	board_layer.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	panel.add_child(margin)
+	var fields := VBoxContainer.new()
+	margin.add_child(fields)
+	var heading := Label.new()
+	heading.text = "Birch's Lab — Change Board"
+	heading.add_theme_font_size_override("font_size", 22)
+	fields.add_child(heading)
+	board_list = RichTextLabel.new()
+	board_list.bbcode_enabled = true
+	board_list.fit_content = false
+	board_list.custom_minimum_size = Vector2(0, 230)
+	fields.add_child(board_list)
+	board_note_id = LineEdit.new()
+	board_note_id.placeholder_text = "Note ID (for edit/status/delete)"
+	fields.add_child(board_note_id)
+	board_title = LineEdit.new()
+	board_title.placeholder_text = "Change request title"
+	fields.add_child(board_title)
+	board_body = TextEdit.new()
+	board_body.placeholder_text = "What should change, and why?"
+	board_body.custom_minimum_size = Vector2(0, 90)
+	fields.add_child(board_body)
+	var actions := HBoxContainer.new()
+	fields.add_child(actions)
+	for spec in [["Post", "post"], ["Save edit", "edit"], ["Claim", "claimed"], ["Done", "done"], ["Decline", "declined"], ["Delete", "delete"], ["Close", "close"]]:
+		var button := Button.new()
+		button.text = spec[0]
+		button.pressed.connect(board_ui_action.bind(spec[1]))
+		actions.add_child(button)
+	board_layer.visible = false
+
+
+func board_ui_action(action: String) -> void:
+	if action == "close":
+		board_layer.visible = false
+		return
+	var result := board_action(action, int(board_note_id.text), board_title.text, board_body.text)
+	message_label.text = str(result.get("message", ""))
+	if bool(result.get("accepted", false)) and action == "post":
+		board_title.clear()
+		board_body.clear()
+	refresh_board_ui()
+
+
+func refresh_board_ui() -> void:
+	if board_list == null:
+		return
+	var lines := PackedStringArray()
+	for note in board_notes():
+		var claimant := "" if str(note.get("claimant_name", "")).is_empty() else " — claimed by %s" % str(note.get("claimant_name", ""))
+		lines.append("[b]#%d [%s] %s[/b] — %s%s\n%s" % [int(note.get("note_id", 0)), str(note.get("status", "open")), str(note.get("title", "")), str(note.get("author_name", "")), claimant, str(note.get("body", ""))])
+	board_list.text = "\n\n".join(lines) if not lines.is_empty() else "No change requests yet. Leave the first one."
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F1:
@@ -154,7 +237,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_ESCAPE and settings_layer.visible:
 			hide_settings_panel()
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_ENTER and not chat_input.has_focus() and not connection_layer.visible and not settings_layer.visible:
+		elif event.keycode == KEY_ESCAPE and board_layer.visible:
+			board_layer.visible = false
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ENTER and not chat_input.has_focus() and not connection_layer.visible and not settings_layer.visible and not board_layer.visible:
 			chat_input.grab_focus()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_ESCAPE and chat_input.has_focus():
@@ -299,7 +385,7 @@ func _process(delta: float) -> void:
 		update_object_steps(delta)
 	else:
 		update_authoritative_object_steps(delta)
-	if connection_layer.visible or settings_layer.visible:
+	if connection_layer.visible or settings_layer.visible or board_layer.visible:
 		poll_control_http()
 		process_sse(delta)
 		return
@@ -417,6 +503,7 @@ func process_spacetime() -> void:
 	update_world_traces()
 	update_other_players()
 	process_world_chat()
+	process_board_notes()
 	process_smoke_client()
 
 
@@ -596,6 +683,39 @@ func process_world_chat() -> void:
 	if chat_log.text != rendered_chat:
 		chat_log.text = rendered_chat
 		scroll_chat_to_bottom.call_deferred()
+
+
+func process_board_notes() -> void:
+	var current := {}
+	for note in board_notes():
+		var note_id := int(note.get("note_id", 0))
+		var revision := int(note.get("updated_at_micros", 0))
+		current[note_id] = revision
+		if not board_notes_seen.has(note_id):
+			if not board_notes_seen.is_empty():
+				emit_sse_event("board_note_posted", board_stream_details(note, "posted"))
+		elif int(board_notes_seen[note_id]) != revision:
+			emit_sse_event("board_note_changed", board_stream_details(note, "changed"))
+	for note_id in board_notes_seen.keys():
+		if not current.has(note_id):
+			emit_sse_event("board_note_deleted", {
+				"summary": "Change request #%d was deleted from Birch's Lab board." % int(note_id),
+				"board_id": BIRCH_BOARD_ID,
+				"note_id": int(note_id),
+			})
+	board_notes_seen = current
+	if board_layer != null and board_layer.visible:
+		refresh_board_ui()
+
+
+func board_stream_details(note: Dictionary, verb: String) -> Dictionary:
+	return {
+		"summary": "%s %s change request #%d [%s]: %s" % [str(note.get("last_actor_name", note.get("author_name", "Someone"))), verb, int(note.get("note_id", 0)), str(note.get("status", "open")), str(note.get("title", ""))],
+		"board_id": BIRCH_BOARD_ID,
+		"map": BIRCH_BOARD_MAP,
+		"note": note,
+		"actor": str(note.get("last_actor", "")),
+	}
 
 
 func scroll_chat_to_bottom() -> void:
@@ -1596,8 +1716,9 @@ func available_interactions(range := 1) -> Array:
 		var distance := landmark_distance(player_cell, landmark)
 		if distance > range:
 			continue
-		var kind := str(landmark.get("kind", ""))
-		if kind != "sign" and kind != "doorway" and kind != "object":
+		var is_board := current_map_name == BIRCH_BOARD_MAP and str(landmark.get("id", "")) == BIRCH_BOARD_TARGET_ID
+		var kind := "board" if is_board else str(landmark.get("kind", ""))
+		if kind != "sign" and kind != "doorway" and kind != "object" and kind != "board":
 			continue
 		if kind == "object" and not object_is_talkable(landmark):
 			continue
@@ -1606,11 +1727,13 @@ func available_interactions(range := 1) -> Array:
 			action = "read"
 		elif kind == "doorway":
 			action = "enter"
+		elif kind == "board":
+			action = "browse"
 		var interaction := {
 			"target_id": str(landmark.get("id", "")),
 			"kind": kind,
 			"action": action,
-			"name": str(landmark.get("name", "")),
+			"name": "Birch's Lab Change Board" if is_board else str(landmark.get("name", "")),
 			"distance": distance,
 			"in_front": landmark_distance(player_cell + facing_delta(), landmark) == 0,
 		}
@@ -1702,6 +1825,8 @@ func show_interaction_result(result: Dictionary) -> void:
 				message_label.text = "Entered %s." % str(result.get("target_map", ""))
 			else:
 				message_label.text = str(result.get("message", "Doorway target is not loaded yet."))
+		"board":
+			message_label.text = "Opened %s (%d change requests)." % [str(result.get("name", "Change Board")), result.get("notes", []).size()]
 		_:
 			message_label.text = str(result.get("message", ""))
 	emit_sse_event("interaction", stream_interaction_details(result))
@@ -1738,6 +1863,8 @@ func interact_with_target(target_id: String) -> Dictionary:
 			"available_interactions": available_interactions(),
 		}
 
+	if current_map_name == BIRCH_BOARD_MAP and target_id == BIRCH_BOARD_TARGET_ID:
+		return interact_with_board(distance)
 	var kind := str(landmark.get("kind", ""))
 	match kind:
 		"sign":
@@ -1755,6 +1882,65 @@ func interact_with_target(target_id: String) -> Dictionary:
 				"message": "Target is not interactive yet.",
 				"distance": distance,
 			}
+
+
+func interact_with_board(distance: int) -> Dictionary:
+	var result := board_snapshot()
+	result.merge({
+		"accepted": true,
+		"target_id": BIRCH_BOARD_TARGET_ID,
+		"kind": "board",
+		"action": "browse",
+		"name": "Birch's Lab Change Board",
+		"distance": distance,
+	}, true)
+	if not OS.has_feature("headless"):
+		refresh_board_ui()
+		board_layer.visible = true
+	return result
+
+
+func board_notes() -> Array:
+	if not spacetime_enabled or spacetime == null:
+		return []
+	return spacetime.board_notes(BIRCH_BOARD_ID)
+
+
+func board_snapshot() -> Dictionary:
+	return {
+		"ok": true,
+		"board_id": BIRCH_BOARD_ID,
+		"name": "Birch's Lab Change Board",
+		"map": BIRCH_BOARD_MAP,
+		"cell": {"x": 7, "y": 1},
+		"notes": board_notes(),
+		"actions": ["post", "edit", "delete", "claimed", "open", "done", "declined"],
+	}
+
+
+func board_action(action: String, note_id: int, title: String, body: String, resolution := "") -> Dictionary:
+	if not spacetime_enabled or not spacetime_ready:
+		return {"ok": false, "accepted": false, "message": "World authority is not ready."}
+	var accepted := false
+	match action:
+		"post":
+			accepted = bool(spacetime.post_board_note(BIRCH_BOARD_ID, title, body))
+		"edit":
+			accepted = bool(spacetime.edit_board_note(note_id, title, body))
+		"delete":
+			accepted = bool(spacetime.delete_board_note(note_id))
+		"open", "claimed", "done", "declined":
+			accepted = bool(spacetime.set_board_note_status(note_id, action, resolution))
+		_:
+			return {"ok": false, "accepted": false, "message": "Unknown board action: %s" % action}
+	return {
+		"ok": true,
+		"accepted": accepted,
+		"board_id": BIRCH_BOARD_ID,
+		"action": action,
+		"note_id": note_id,
+		"message": "Board action requested." if accepted else "Board action rejected: %s" % spacetime.last_error(),
+	}
 
 
 func interact_with_sign(landmark: Dictionary, distance: int) -> Dictionary:
@@ -2020,6 +2206,8 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 					"POST /face": "Turn in place with JSON body like {\"direction\":\"east\"}.",
 					"POST /gesture": "Gesture with JSON body like {\"gesture\":\"wave\"}.",
 					"POST /chat": "Chat with JSON body like {\"text\":\"Hello!\"}.",
+					"GET /board": "Read Birch's Lab change board.",
+					"POST /board": "Act with JSON such as {\"action\":\"post\",\"title\":\"...\",\"body\":\"...\"}.",
 					"GET /move?direction=east": "Move using a query string direction.",
 					"GET /stream": "Open a semantic server-sent event stream of visible world changes.",
 					"GET /screenshot": "Return the current Godot viewport as image/png.",
@@ -2095,6 +2283,13 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 				send_control_json(peer, 405, {"ok": false, "message": "Use POST /chat with JSON body {\"text\":\"Hello!\"}."})
 			else:
 				send_control_json(peer, 200, control_chat(request["body"]))
+		"/board":
+			if method == "GET":
+				send_control_json(peer, 200, board_snapshot())
+			elif method == "POST":
+				send_control_json(peer, 200, control_board(request["body"]))
+			else:
+				send_control_json(peer, 405, {"ok": false, "message": "Use GET or POST /board."})
 		_:
 			if path.begins_with("/move/"):
 				send_control_json(peer, 200, move_direction(path.trim_prefix("/move/")))
@@ -2197,6 +2392,8 @@ func emit_sse_event(kind: String, details: Dictionary) -> void:
 			if kind == "world_chat" and str(details.get("message", {}).get("sender", "")) == local_identity:
 				continue
 			if kind == "player_gesture" and str(details.get("player", {}).get("identity", "")) == local_identity:
+				continue
+			if kind.begins_with("board_note_") and str(details.get("actor", "")) == local_identity:
 				continue
 		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
 			closed.append(connection)
@@ -2368,6 +2565,8 @@ func stream_interaction_details(result: Dictionary) -> Dictionary:
 				summary = "Entered %s through %s." % [str(result.get("target_map", "")), name]
 			else:
 				summary = "Tried %s; %s" % [name, str(result.get("message", ""))]
+		"board":
+			summary = "Browsed %s with %d change requests." % [name, result.get("notes", []).size()]
 		_:
 			summary = str(result.get("message", "Interaction completed."))
 
@@ -2471,6 +2670,19 @@ func control_chat(body: String) -> Dictionary:
 	if not bool(parsed.get("ok", true)):
 		return parsed
 	return send_chat(str(parsed.get("text", "")))
+
+
+func control_board(body: String) -> Dictionary:
+	var parsed := parse_json_body(body)
+	if not bool(parsed.get("ok", true)):
+		return parsed
+	return board_action(
+		str(parsed.get("action", "")),
+		int(parsed.get("note_id", 0)),
+		str(parsed.get("title", "")),
+		str(parsed.get("body", "")),
+		str(parsed.get("resolution", ""))
+	)
 
 
 func control_interact(body: String, query: Dictionary) -> Dictionary:

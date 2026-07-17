@@ -6,6 +6,10 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+pub mod board_note_table;
+pub mod board_note_type;
+pub mod delete_board_note_reducer;
+pub mod edit_board_note_reducer;
 pub mod face_player_reducer;
 pub mod gesture_player_reducer;
 pub mod join_world_reducer;
@@ -18,8 +22,10 @@ pub mod player_presence_table;
 pub mod player_presence_type;
 pub mod player_table;
 pub mod player_type;
+pub mod post_board_note_reducer;
 pub mod seed_world_map_reducer;
 pub mod send_world_chat_reducer;
+pub mod set_board_note_status_reducer;
 pub mod use_doorway_reducer;
 pub mod world_chat_table;
 pub mod world_chat_type;
@@ -29,6 +35,10 @@ pub mod world_tick_schedule_type;
 pub mod world_trace_table;
 pub mod world_trace_type;
 
+pub use board_note_table::*;
+pub use board_note_type::BoardNote;
+pub use delete_board_note_reducer::delete_board_note;
+pub use edit_board_note_reducer::edit_board_note;
 pub use face_player_reducer::face_player;
 pub use gesture_player_reducer::gesture_player;
 pub use join_world_reducer::join_world;
@@ -41,8 +51,10 @@ pub use player_presence_table::*;
 pub use player_presence_type::PlayerPresence;
 pub use player_table::*;
 pub use player_type::Player;
+pub use post_board_note_reducer::post_board_note;
 pub use seed_world_map_reducer::seed_world_map;
 pub use send_world_chat_reducer::send_world_chat;
+pub use set_board_note_status_reducer::set_board_note_status;
 pub use use_doorway_reducer::use_doorway;
 pub use world_chat_table::*;
 pub use world_chat_type::WorldChat;
@@ -60,6 +72,14 @@ pub use world_trace_type::WorldTrace;
 /// to indicate which reducer caused the event.
 
 pub enum Reducer {
+    DeleteBoardNote {
+        note_id: u64,
+    },
+    EditBoardNote {
+        note_id: u64,
+        title: String,
+        body: String,
+    },
     FacePlayer {
         direction: String,
     },
@@ -73,6 +93,11 @@ pub enum Reducer {
     MovePlayer {
         direction: String,
     },
+    PostBoardNote {
+        board_id: String,
+        title: String,
+        body: String,
+    },
     SeedWorldMap {
         map_name: String,
         map_constant: String,
@@ -80,6 +105,11 @@ pub enum Reducer {
     },
     SendWorldChat {
         text: String,
+    },
+    SetBoardNoteStatus {
+        note_id: u64,
+        status: String,
+        resolution: String,
     },
     UseDoorway {
         target_id: String,
@@ -93,12 +123,16 @@ impl __sdk::InModule for Reducer {
 impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
+            Reducer::DeleteBoardNote { .. } => "delete_board_note",
+            Reducer::EditBoardNote { .. } => "edit_board_note",
             Reducer::FacePlayer { .. } => "face_player",
             Reducer::GesturePlayer { .. } => "gesture_player",
             Reducer::JoinWorld { .. } => "join_world",
             Reducer::MovePlayer { .. } => "move_player",
+            Reducer::PostBoardNote { .. } => "post_board_note",
             Reducer::SeedWorldMap { .. } => "seed_world_map",
             Reducer::SendWorldChat { .. } => "send_world_chat",
+            Reducer::SetBoardNoteStatus { .. } => "set_board_note_status",
             Reducer::UseDoorway { .. } => "use_doorway",
             _ => unreachable!(),
         }
@@ -106,6 +140,20 @@ impl __sdk::Reducer for Reducer {
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
+            Reducer::DeleteBoardNote { note_id } => {
+                __sats::bsatn::to_vec(&delete_board_note_reducer::DeleteBoardNoteArgs {
+                    note_id: note_id.clone(),
+                })
+            }
+            Reducer::EditBoardNote {
+                note_id,
+                title,
+                body,
+            } => __sats::bsatn::to_vec(&edit_board_note_reducer::EditBoardNoteArgs {
+                note_id: note_id.clone(),
+                title: title.clone(),
+                body: body.clone(),
+            }),
             Reducer::FacePlayer { direction } => {
                 __sats::bsatn::to_vec(&face_player_reducer::FacePlayerArgs {
                     direction: direction.clone(),
@@ -128,6 +176,15 @@ impl __sdk::Reducer for Reducer {
                     direction: direction.clone(),
                 })
             }
+            Reducer::PostBoardNote {
+                board_id,
+                title,
+                body,
+            } => __sats::bsatn::to_vec(&post_board_note_reducer::PostBoardNoteArgs {
+                board_id: board_id.clone(),
+                title: title.clone(),
+                body: body.clone(),
+            }),
             Reducer::SeedWorldMap {
                 map_name,
                 map_constant,
@@ -142,6 +199,15 @@ impl __sdk::Reducer for Reducer {
                     text: text.clone(),
                 })
             }
+            Reducer::SetBoardNoteStatus {
+                note_id,
+                status,
+                resolution,
+            } => __sats::bsatn::to_vec(&set_board_note_status_reducer::SetBoardNoteStatusArgs {
+                note_id: note_id.clone(),
+                status: status.clone(),
+                resolution: resolution.clone(),
+            }),
             Reducer::UseDoorway { target_id } => {
                 __sats::bsatn::to_vec(&use_doorway_reducer::UseDoorwayArgs {
                     target_id: target_id.clone(),
@@ -156,6 +222,7 @@ impl __sdk::Reducer for Reducer {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct DbUpdate {
+    board_note: __sdk::TableUpdate<BoardNote>,
     npc_state: __sdk::TableUpdate<NpcState>,
     player: __sdk::TableUpdate<Player>,
     player_position: __sdk::TableUpdate<PlayerPosition>,
@@ -171,6 +238,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_update in __sdk::transaction_update_iter_table_updates(raw) {
             match &table_update.table_name[..] {
+                "board_note" => db_update
+                    .board_note
+                    .append(board_note_table::parse_table_update(table_update)?),
                 "npc_state" => db_update
                     .npc_state
                     .append(npc_state_table::parse_table_update(table_update)?),
@@ -218,6 +288,9 @@ impl __sdk::DbUpdate for DbUpdate {
     ) -> AppliedDiff<'_> {
         let mut diff = AppliedDiff::default();
 
+        diff.board_note = cache
+            .apply_diff_to_table::<BoardNote>("board_note", &self.board_note)
+            .with_updates_by_pk(|row| &row.note_id);
         diff.npc_state = cache
             .apply_diff_to_table::<NpcState>("npc_state", &self.npc_state)
             .with_updates_by_pk(|row| &row.key);
@@ -246,6 +319,9 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "board_note" => db_update
+                    .board_note
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "npc_state" => db_update
                     .npc_state
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -280,6 +356,9 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "board_note" => db_update
+                    .board_note
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "npc_state" => db_update
                     .npc_state
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -316,6 +395,7 @@ impl __sdk::DbUpdate for DbUpdate {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
+    board_note: __sdk::TableAppliedDiff<'r, BoardNote>,
     npc_state: __sdk::TableAppliedDiff<'r, NpcState>,
     player: __sdk::TableAppliedDiff<'r, Player>,
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
@@ -336,6 +416,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         event: &EventContext,
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
+        callbacks.invoke_table_row_callbacks::<BoardNote>("board_note", &self.board_note, event);
         callbacks.invoke_table_row_callbacks::<NpcState>("npc_state", &self.npc_state, event);
         callbacks.invoke_table_row_callbacks::<Player>("player", &self.player, event);
         callbacks.invoke_table_row_callbacks::<PlayerPosition>(
@@ -1011,6 +1092,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     type QueryBuilder = __sdk::QueryBuilder;
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
+        board_note_table::register_table(client_cache);
         npc_state_table::register_table(client_cache);
         player_table::register_table(client_cache);
         player_position_table::register_table(client_cache);
@@ -1020,6 +1102,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         world_trace_table::register_table(client_cache);
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
+        "board_note",
         "npc_state",
         "player",
         "player_position",
