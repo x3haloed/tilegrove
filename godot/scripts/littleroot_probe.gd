@@ -117,6 +117,7 @@ var board_list: RichTextLabel
 var board_note_id: LineEdit
 var board_title: LineEdit
 var board_body: TextEdit
+var help_layer: CanvasLayer
 
 
 func _ready() -> void:
@@ -124,6 +125,7 @@ func _ready() -> void:
 	setup_connection_ui()
 	setup_settings_ui()
 	setup_board_ui()
+	setup_help_ui()
 	chat_input.text_submitted.connect(submit_chat)
 	configure_initial_connection()
 	load_player_sprite()
@@ -204,6 +206,61 @@ func setup_board_ui() -> void:
 	board_layer.visible = false
 
 
+func setup_help_ui() -> void:
+	help_layer = CanvasLayer.new()
+	help_layer.layer = 21
+	add_child(help_layer)
+	var shade := ColorRect.new()
+	shade.color = Color(0.02, 0.04, 0.03, 0.82)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	help_layer.add_child(shade)
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.position = Vector2(-280, -200)
+	panel.size = Vector2(560, 400)
+	help_layer.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	panel.add_child(margin)
+	var fields := VBoxContainer.new()
+	margin.add_child(fields)
+	var heading := Label.new()
+	heading.text = "Controls"
+	heading.add_theme_font_size_override("font_size", 22)
+	fields.add_child(heading)
+	var controls_text := RichTextLabel.new()
+	controls_text.bbcode_enabled = true
+	controls_text.fit_content = false
+	controls_text.custom_minimum_size = Vector2(0, 260)
+	controls_text.text = """[b]Movement[/b]
+Arrow keys — walk
+Shift + Arrow keys — face direction
+
+[b]Interaction[/b]
+E or Space — interact with what you're facing
+G — wave
+
+[b]Chat[/b]
+Enter — open chat input
+Escape — close chat / close panels
+
+[b]Panels[/b]
+F1 — settings
+F2 — this help screen
+"""
+	fields.add_child(controls_text)
+	var close_row := HBoxContainer.new()
+	fields.add_child(close_row)
+	var close_btn := Button.new()
+	close_btn.text = "Close"
+	close_btn.pressed.connect(func(): help_layer.visible = false)
+	close_row.add_child(close_btn)
+	help_layer.visible = false
+
+
 func board_ui_action(action: String) -> void:
 	if action == "close":
 		board_layer.visible = false
@@ -233,6 +290,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				hide_settings_panel()
 			else:
 				show_settings_panel()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_F2:
+			help_layer.visible = not help_layer.visible
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ESCAPE and help_layer.visible:
+			help_layer.visible = false
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_ESCAPE and settings_layer.visible:
 			hide_settings_panel()
