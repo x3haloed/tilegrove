@@ -2169,8 +2169,14 @@ func emit_sse_event(kind: String, details: Dictionary) -> void:
 	var closed: Array[Dictionary] = []
 	for connection in sse_connections:
 		var peer: StreamPeerTCP = connection["peer"]
-		if bool(connection.get("attention_only", false)) and kind in ["ambient_status", "silence", "npc_motion"]:
-			continue
+		if bool(connection.get("attention_only", false)):
+			if kind in ["ambient_status", "silence", "npc_motion", "player_moved"]:
+				continue
+			var local_identity := str(spacetime.local_identity()) if spacetime != null else ""
+			if kind == "world_chat" and str(details.get("message", {}).get("sender", "")) == local_identity:
+				continue
+			if kind == "player_gesture" and str(details.get("player", {}).get("identity", "")) == local_identity:
+				continue
 		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
 			closed.append(connection)
 			continue
