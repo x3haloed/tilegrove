@@ -793,10 +793,11 @@ func perform_gesture(gesture: String) -> Dictionary:
 		accepted = spacetime_ready and bool(spacetime.gesture_player(gesture))
 	if accepted:
 		update_status("waved")
+		var local_identity := str(spacetime.local_identity()) if spacetime != null else ""
 		emit_sse_event("player_gesture", {
 			"summary": "%s waved." % player_display_name,
 			"gesture": gesture,
-			"player": {"display_name": player_display_name, "map": current_map_name, "x": player_cell.x, "y": player_cell.y},
+			"player": {"identity": local_identity, "display_name": player_display_name, "map": current_map_name, "x": player_cell.x, "y": player_cell.y},
 		})
 	else:
 		update_status("gesture rejected")
