@@ -642,7 +642,17 @@ pub fn set_board_note_status(
         bounded_text(&resolution, "Resolution", 1, 1000)?
     };
     let (claimant, claimant_name) = match status.as_str() {
-        "claimed" => (Some(ctx.sender()), player.display_name.clone()),
+        "claimed" => {
+            if let Some(current) = &note.claimant {
+                if current != &ctx.sender() {
+                    return Err(format!(
+                        "Note already claimed by {}. Cannot overwrite.",
+                        note.claimant_name
+                    ));
+                }
+            }
+            (Some(ctx.sender()), player.display_name.clone())
+        }
         "open" => (None, String::new()),
         "done" | "declined" => {
             if note.author != ctx.sender() && note.claimant != Some(ctx.sender()) {
