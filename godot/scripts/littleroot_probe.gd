@@ -18,6 +18,7 @@ const PLAYER_STEP_DURATION_SECONDS := 0.16
 const OBJECT_STEP_DURATION_SECONDS := 0.32
 const OBJECT_IDLE_SECONDS := 1.0
 const SSE_NPC_MOTION_SECONDS := 3.0
+const SSE_PLAYER_ACTIVITY_SECONDS := 0.75
 const SSE_AMBIENT_SECONDS := 10.0
 const SSE_SILENCE_SECONDS := 3600.0
 const NEARBY_PLAYER_NAME_RADIUS := 7
@@ -83,6 +84,8 @@ var object_states: Dictionary = {}
 var sse_connections: Array[Dictionary] = []
 var sse_npc_motion_buffer: Array[Dictionary] = []
 var sse_npc_motion_elapsed := 0.0
+var sse_player_activity: Dictionary = {}
+var sse_player_activity_elapsed := 0.0
 var sse_ambient_elapsed := 0.0
 var sse_silence_elapsed := 0.0
 var spacetime = null
@@ -2129,6 +2132,8 @@ func process_sse(delta: float) -> void:
 	if sse_connections.is_empty():
 		sse_npc_motion_buffer = []
 		sse_npc_motion_elapsed = 0.0
+		sse_player_activity = {}
+		sse_player_activity_elapsed = 0.0
 		sse_ambient_elapsed = 0.0
 		sse_silence_elapsed = 0.0
 		return
@@ -2137,6 +2142,10 @@ func process_sse(delta: float) -> void:
 		sse_npc_motion_elapsed += delta
 		if sse_npc_motion_elapsed >= SSE_NPC_MOTION_SECONDS:
 			flush_npc_motion()
+	if not sse_player_activity.is_empty():
+		sse_player_activity_elapsed += delta
+		if sse_player_activity_elapsed >= SSE_PLAYER_ACTIVITY_SECONDS:
+			flush_player_activity()
 
 	sse_ambient_elapsed += delta
 	sse_silence_elapsed += delta
@@ -2172,13 +2181,17 @@ func flush_npc_motion() -> void:
 func emit_sse_event(kind: String, details: Dictionary) -> void:
 	if sse_connections.is_empty():
 		return
+	if kind not in ["player_moved_nearby", "player_turned_nearby"] and not sse_player_activity.is_empty():
+		flush_player_activity()
 	if kind != "ambient_status" and kind != "silence" and kind != "npc_motion":
 		sse_silence_elapsed = 0.0
+	if kind in ["player_moved_nearby", "player_turned_nearby"]:
+		queue_player_activity(kind, details)
 	var closed: Array[Dictionary] = []
 	for connection in sse_connections:
 		var peer: StreamPeerTCP = connection["peer"]
 		if bool(connection.get("attention_only", false)):
-			if kind in ["ambient_status", "silence", "npc_motion", "player_moved"]:
+			if kind in ["ambient_status", "silence", "npc_motion", "player_moved", "player_moved_nearby", "player_turned_nearby"]:
 				continue
 			var local_identity := str(spacetime.local_identity()) if spacetime != null else ""
 			if kind == "world_chat" and str(details.get("message", {}).get("sender", "")) == local_identity:
@@ -2193,6 +2206,52 @@ func emit_sse_event(kind: String, details: Dictionary) -> void:
 			closed.append(connection)
 	for connection in closed:
 		sse_connections.erase(connection)
+
+
+func queue_player_activity(kind: String, details: Dictionary) -> void:
+	var player: Dictionary = details.get("player", {})
+	var identity := str(player.get("identity", ""))
+	if identity.is_empty():
+		return
+	var activity: Dictionary = sse_player_activity.get(identity, {
+		"player": player,
+		"previous": details.get("previous", {}),
+		"moves": 0,
+		"turns": 0,
+	})
+	activity["player"] = player
+	activity["moves"] = int(activity.get("moves", 0)) + (1 if kind == "player_moved_nearby" else 0)
+	activity["turns"] = int(activity.get("turns", 0)) + (1 if kind == "player_turned_nearby" else 0)
+	sse_player_activity[identity] = activity
+	sse_player_activity_elapsed = 0.0
+
+
+func flush_player_activity() -> void:
+	var activities := sse_player_activity.values()
+	sse_player_activity = {}
+	sse_player_activity_elapsed = 0.0
+	for activity in activities:
+		var player: Dictionary = activity.get("player", {})
+		var moves := int(activity.get("moves", 0))
+		var turns := int(activity.get("turns", 0))
+		var action_parts := PackedStringArray()
+		if moves > 0:
+			action_parts.append("moved %d %s" % [moves, "step" if moves == 1 else "steps"])
+		if turns > 0:
+			action_parts.append("turned %d %s" % [turns, "time" if turns == 1 else "times"])
+		var details := {
+			"summary": "%s %s, ending at %s facing %s." % [str(player.get("display_name", "A player")), " and ".join(action_parts), cell_text(Vector2i(int(player.get("x", 0)), int(player.get("y", 0)))), str(player.get("facing", ""))],
+			"player": player,
+			"previous": activity.get("previous", {}),
+			"move_count": moves,
+			"turn_count": turns,
+		}
+		for connection in sse_connections:
+			if not bool(connection.get("attention_only", false)):
+				continue
+			var peer: StreamPeerTCP = connection["peer"]
+			if peer.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+				send_sse_event(peer, "player_activity", details)
 
 
 func send_sse_event(peer: StreamPeerTCP, kind: String, details: Dictionary) -> Error:
