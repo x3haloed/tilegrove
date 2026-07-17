@@ -66,6 +66,8 @@ offset_right = 1120.0
 offset_bottom = 550.0
 fit_content = false
 scroll_active = true
+scroll_following = true
+scroll_following_visible_characters = true
 
 [node name="ChatInput" type="LineEdit" parent="."]
 offset_left = 704.0

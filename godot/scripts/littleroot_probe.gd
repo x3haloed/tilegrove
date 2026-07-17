@@ -589,8 +589,15 @@ func process_world_chat() -> void:
 			"summary": "%s said: %s" % [str(message.get("display_name", "Player")), str(message.get("text", ""))],
 			"message": message,
 		})
-	chat_log.text = "\n".join(lines)
-	chat_log.scroll_to_line(maxi(0, lines.size() - 1))
+	var rendered_chat := "\n".join(lines)
+	if chat_log.text != rendered_chat:
+		chat_log.text = rendered_chat
+		scroll_chat_to_bottom.call_deferred()
+
+
+func scroll_chat_to_bottom() -> void:
+	var scroll_bar := chat_log.get_v_scroll_bar()
+	scroll_bar.value = scroll_bar.max_value
 
 
 func submit_chat(text: String) -> void:
