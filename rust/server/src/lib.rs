@@ -598,8 +598,12 @@ pub fn use_doorway(ctx: &ReducerContext, target_id: String) -> Result<(), String
         .ok_or_else(|| format!("Doorway target {raw_target} is not seeded"))?;
     let warp_id = landmark
         .get("dest_warp_id")
-        .and_then(Value::as_i64)
-        .unwrap_or(0) as usize;
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| text.parse::<u64>().ok()))
+        })
+        .ok_or("Doorway destination warp id is invalid")? as usize;
     let target_manifest: Value = serde_json::from_str(&target_map.manifest_json)
         .map_err(|error| format!("Stored target manifest is invalid: {error}"))?;
     let warp = target_manifest
@@ -615,8 +619,8 @@ pub fn use_doorway(ctx: &ReducerContext, target_id: String) -> Result<(), String
         .get("y")
         .and_then(Value::as_i64)
         .ok_or("Target warp y missing")? as i32;
-    if !cell_passable(&target_manifest, x, y) {
-        return Err("Target warp cell is blocked".into());
+    if x < 0 || y < 0 || x >= target_map.width || y >= target_map.height {
+        return Err("Target warp cell is outside the target map".into());
     }
     ctx.db.player_position().identity().update(PlayerPosition {
         map_name: target_map.map_name,
