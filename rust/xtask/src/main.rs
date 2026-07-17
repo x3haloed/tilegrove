@@ -38,6 +38,7 @@ fn main() -> ExitCode {
         [cmd, sub] if cmd == "remote" && sub == "publish" => remote_publish(),
         [cmd, sub] if cmd == "remote" && sub == "status" => remote_status(),
         [cmd, sub] if cmd == "client" && sub == "build" => client_build(),
+        [cmd, sub] if cmd == "client" && sub == "update" => client_update(),
         [cmd, sub] if cmd == "godot" && sub == "run" => godot_run(),
         [cmd, sub] if cmd == "smoke" && sub == "two-clients" => smoke_two_clients(),
         _ => Err(format!("Unknown command: {}", args.join(" "))),
@@ -62,6 +63,7 @@ Tilegrove repository tasks
   cargo xtask db start|build|publish|generate
   cargo xtask remote publish|status
   cargo xtask client build
+  cargo xtask client update
   cargo xtask godot run
   cargo xtask play --profile NAME [--name DISPLAY] [--uri URI] [--database DB] [--port PORT] [--headless]
   cargo xtask players
@@ -200,6 +202,11 @@ fn client_build() -> Result<(), String> {
         .map_err(|error| format!("copy {}: {error}", source.display()))?;
     Ok(())
 }
+fn client_update() -> Result<(), String> {
+    run("git", ["pull"], repo())?;
+    client_build()
+}
+
 fn godot_run() -> Result<(), String> {
     exec("godot", ["--path", "godot"], repo())
 }
