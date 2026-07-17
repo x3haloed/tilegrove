@@ -5,6 +5,7 @@ const CONTROL_HTTP_HOST := "127.0.0.1"
 const CONTROL_HTTP_PORT := 38473
 const CONTROL_HTTP_PORT_SCAN_COUNT := 16
 const CONTROL_HTTP_REQUEST_TIMEOUT_MSEC := 2500
+const BOARD_ACTION_CONFIRM_TIMEOUT_MSEC := 2500
 const CONTROL_HTTP_MAX_REQUEST_BYTES := 65536
 const WORLD_REGISTRY_PATH := "res://assets/pokeemerald/maps/world_registry.json"
 const OBJECT_SPRITE_ROOT := "res://assets/pokeemerald/object_sprites"
@@ -74,6 +75,7 @@ var manifest: Dictionary = {}
 var player_cell := Vector2i(10, 15)
 var control_server := TCPServer.new()
 var control_connections: Array[Dictionary] = []
+var pending_board_http: Array[Dictionary] = []
 var control_http_port := 0
 var control_http_status := "control endpoint stopped"
 var interact_key_was_down := false
@@ -443,6 +445,7 @@ func connect_from_panel() -> void:
 
 func _process(delta: float) -> void:
 	process_spacetime()
+	poll_pending_board_http()
 	update_player_step(delta)
 	if not spacetime_enabled:
 		update_object_steps(delta)
@@ -2350,7 +2353,14 @@ func handle_control_request(peer: StreamPeerTCP, request_text: String) -> bool:
 			if method == "GET":
 				send_control_json(peer, 200, board_snapshot())
 			elif method == "POST":
-				send_control_json(peer, 200, control_board(request["body"]))
+				var pending := begin_control_board(request["body"])
+				if not bool(pending.get("ok", false)):
+					send_control_json(peer, 400, pending)
+				else:
+					pending["peer"] = peer
+					pending["started_msec"] = Time.get_ticks_msec()
+					pending_board_http.append(pending)
+					return true
 			else:
 				send_control_json(peer, 405, {"ok": false, "message": "Use GET or POST /board."})
 		_:
@@ -2735,17 +2745,78 @@ func control_chat(body: String) -> Dictionary:
 	return send_chat(str(parsed.get("text", "")))
 
 
-func control_board(body: String) -> Dictionary:
+func begin_control_board(body: String) -> Dictionary:
 	var parsed := parse_json_body(body)
 	if not bool(parsed.get("ok", true)):
 		return parsed
-	return board_action(
-		str(parsed.get("action", "")),
+	var action := str(parsed.get("action", "")).strip_edges().to_lower()
+	if action not in ["post", "edit", "delete", "claimed", "open", "done", "declined"]:
+		return {"ok": false, "accepted": false, "message": "Unknown board action."}
+	if spacetime == null or not spacetime_enabled:
+		return {"ok": false, "accepted": false, "message": "SpacetimeDB is unavailable."}
+	var action_id := int(spacetime.begin_board_action(
+		action,
+		BIRCH_BOARD_ID,
 		int(parsed.get("note_id", 0)),
 		str(parsed.get("title", "")),
 		str(parsed.get("body", "")),
 		str(parsed.get("resolution", ""))
-	)
+	))
+	if action_id <= 0:
+		return {"ok": false, "accepted": false, "message": str(spacetime.last_error())}
+	return {
+		"ok": true,
+		"accepted": true,
+		"action_id": action_id,
+		"action": action,
+		"note_id": int(parsed.get("note_id", 0)),
+		"board_id": BIRCH_BOARD_ID,
+	}
+
+
+func poll_pending_board_http() -> void:
+	if pending_board_http.is_empty() or spacetime == null:
+		return
+	var finished: Array[Dictionary] = []
+	for pending in pending_board_http:
+		var peer: StreamPeerTCP = pending["peer"]
+		var action_id := int(pending["action_id"])
+		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			spacetime.forget_board_action_result(action_id)
+			finished.append(pending)
+			continue
+		var result: Dictionary = spacetime.board_action_result(action_id)
+		if bool(result.get("complete", false)):
+			var ok := bool(result.get("ok", false))
+			var error := str(result.get("error", ""))
+			var response := {
+				"ok": ok,
+				"accepted": ok,
+				"confirmed": true,
+				"board_id": pending["board_id"],
+				"action": pending["action"],
+				"note_id": pending["note_id"],
+				"message": "Board action confirmed." if ok else error,
+			}
+			send_control_json(peer, 200 if ok else 409, response)
+			spacetime.forget_board_action_result(action_id)
+			peer.disconnect_from_host()
+			finished.append(pending)
+		elif Time.get_ticks_msec() - int(pending["started_msec"]) >= BOARD_ACTION_CONFIRM_TIMEOUT_MSEC:
+			send_control_json(peer, 504, {
+				"ok": false,
+				"accepted": false,
+				"confirmed": false,
+				"board_id": pending["board_id"],
+				"action": pending["action"],
+				"note_id": pending["note_id"],
+				"message": "Board action confirmation timed out; authoritative outcome unknown. Read GET /board before retrying.",
+			})
+			spacetime.forget_board_action_result(action_id)
+			peer.disconnect_from_host()
+			finished.append(pending)
+	for pending in finished:
+		pending_board_http.erase(pending)
 
 
 func control_interact(body: String, query: Dictionary) -> Dictionary:
@@ -2834,8 +2905,12 @@ func send_control_bytes(peer: StreamPeerTCP, status_code: int, content_type: Str
 			reason = "Method Not Allowed"
 		408:
 			reason = "Request Timeout"
+		409:
+			reason = "Conflict"
 		413:
 			reason = "Payload Too Large"
+		504:
+			reason = "Gateway Timeout"
 		_:
 			reason = "OK"
 	var header_text := "\r\n".join([

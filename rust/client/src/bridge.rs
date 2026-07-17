@@ -1,7 +1,10 @@
 #[path = "../generated/mod.rs"]
 mod generated;
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use generated::{
     BoardNoteTableAccess, DbConnection, NpcState, NpcStateTableAccess, Player, PlayerPosition,
@@ -11,6 +14,7 @@ use generated::{
     send_world_chat, set_board_note_status, use_doorway,
 };
 use godot::prelude::*;
+use spacetimedb_sdk::__codegen::InternalError;
 use spacetimedb_sdk::{DbContext, Table, credentials};
 
 const CLIENT_PROTOCOL: u32 = 1;
@@ -25,6 +29,8 @@ pub struct TilegroveBridge {
     subscribed: bool,
     status: String,
     last_error: String,
+    next_board_action_id: u64,
+    board_action_results: Arc<Mutex<HashMap<u64, Option<String>>>>,
     #[base]
     base: Base<RefCounted>,
 }
@@ -38,6 +44,8 @@ impl IRefCounted for TilegroveBridge {
             subscribed: false,
             status: "disconnected".into(),
             last_error: String::new(),
+            next_board_action_id: 1,
+            board_action_results: Arc::new(Mutex::new(HashMap::new())),
             base,
         }
     }
@@ -216,6 +224,109 @@ impl TilegroveBridge {
                 resolution.to_string(),
             )
         })
+    }
+
+    #[func]
+    pub fn begin_board_action(
+        &mut self,
+        action: GString,
+        board_id: GString,
+        note_id: i64,
+        title: GString,
+        body: GString,
+        resolution: GString,
+    ) -> i64 {
+        let Some(connection) = self.connection.as_ref() else {
+            self.last_error = "Not connected".into();
+            return 0;
+        };
+        let action_id = self.next_board_action_id;
+        self.next_board_action_id = self.next_board_action_id.saturating_add(1);
+        self.board_action_results
+            .lock()
+            .unwrap()
+            .insert(action_id, None);
+        let results = Arc::clone(&self.board_action_results);
+        let callback = move |result: Result<Result<(), String>, InternalError>| {
+            let message = match result {
+                Ok(Ok(())) => String::new(),
+                Ok(Err(error)) => error,
+                Err(error) => error.to_string(),
+            };
+            results.lock().unwrap().insert(action_id, Some(message));
+        };
+        let action = action.to_string();
+        let dispatch = match action.as_str() {
+            "post" => connection.reducers.post_board_note_then(
+                board_id.to_string(),
+                title.to_string(),
+                body.to_string(),
+                move |_, result| callback(result),
+            ),
+            "edit" => connection.reducers.edit_board_note_then(
+                note_id as u64,
+                title.to_string(),
+                body.to_string(),
+                move |_, result| callback(result),
+            ),
+            "delete" => connection
+                .reducers
+                .delete_board_note_then(note_id as u64, move |_, result| callback(result)),
+            "open" | "claimed" | "done" | "declined" => {
+                connection.reducers.set_board_note_status_then(
+                    note_id as u64,
+                    action,
+                    resolution.to_string(),
+                    move |_, result| callback(result),
+                )
+            }
+            _ => {
+                self.board_action_results.lock().unwrap().remove(&action_id);
+                self.last_error = "Unknown board action".into();
+                return 0;
+            }
+        };
+        if let Err(error) = dispatch {
+            self.board_action_results.lock().unwrap().remove(&action_id);
+            self.last_error = error.to_string();
+            return 0;
+        }
+        action_id as i64
+    }
+
+    #[func]
+    pub fn board_action_result(&self, action_id: i64) -> Dictionary<Variant, Variant> {
+        let mut result = Dictionary::new();
+        let state = self
+            .board_action_results
+            .lock()
+            .unwrap()
+            .get(&(action_id as u64))
+            .cloned();
+        match state {
+            Some(None) => {
+                result.set("complete", false);
+            }
+            Some(Some(error)) => {
+                result.set("complete", true);
+                result.set("ok", error.is_empty());
+                result.set("error", error);
+            }
+            None => {
+                result.set("complete", true);
+                result.set("ok", false);
+                result.set("error", "Unknown board action operation.");
+            }
+        }
+        result
+    }
+
+    #[func]
+    pub fn forget_board_action_result(&mut self, action_id: i64) {
+        self.board_action_results
+            .lock()
+            .unwrap()
+            .remove(&(action_id as u64));
     }
 
     #[func]
