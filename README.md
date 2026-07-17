@@ -71,6 +71,13 @@ Connect a profile to another SpacetimeDB deployment without changing its identit
 
 Use `--port PORT` only when a stable explicit control port is needed; otherwise the launcher selects an available profile-derived port.
 
+Participants that do not need a visible Godot window can add `--headless`. The
+semantic control and SSE endpoints remain available; only `/screenshot` requires
+the GUI renderer:
+
+    cargo xtask play --profile aster --name Aster --headless \
+      --uri https://maincloud.spacetimedb.com --database tilegrove --port 39229
+
 The shared Tilegrove authority is maintained through checked-in commands rather than an undocumented manual deployment:
 
     cargo xtask remote publish

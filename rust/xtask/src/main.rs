@@ -63,7 +63,7 @@ Tilegrove repository tasks
   cargo xtask remote publish|status
   cargo xtask client build
   cargo xtask godot run
-  cargo xtask play --profile NAME [--name DISPLAY] [--uri URI] [--database DB] [--port PORT]
+  cargo xtask play --profile NAME [--name DISPLAY] [--uri URI] [--database DB] [--port PORT] [--headless]
   cargo xtask players
   cargo xtask smoke two-clients
   cargo xtask dev"
@@ -221,6 +221,7 @@ struct PlayOptions {
     uri: String,
     database: String,
     control_port: Option<u16>,
+    headless: bool,
 }
 
 fn play(args: &[String]) -> Result<(), String> {
@@ -266,9 +267,14 @@ fn play(args: &[String]) -> Result<(), String> {
         descriptor.profile, descriptor.display_name, descriptor.control_port
     );
     let port = control_port.to_string();
+    let godot_args = if options.headless {
+        vec!["--headless", "--path", "godot"]
+    } else {
+        vec!["--path", "godot"]
+    };
     let result = exec_with_env(
         "godot",
-        ["--path", "godot"],
+        godot_args,
         repo(),
         &[
             ("TILEGROVE_PROFILE", options.profile.as_str()),
@@ -328,9 +334,15 @@ fn parse_play_options(args: &[String]) -> Result<PlayOptions, String> {
     let mut uri = "http://127.0.0.1:3000".to_owned();
     let mut database = DB_NAME.to_owned();
     let mut control_port = None;
+    let mut headless = false;
     let mut index = 0;
     while index < args.len() {
         let flag = &args[index];
+        if flag == "--headless" {
+            headless = true;
+            index += 1;
+            continue;
+        }
         let value = args
             .get(index + 1)
             .ok_or_else(|| format!("{flag} requires a value"))?;
@@ -358,6 +370,7 @@ fn parse_play_options(args: &[String]) -> Result<PlayOptions, String> {
         uri,
         database,
         control_port,
+        headless,
     })
 }
 
@@ -730,5 +743,20 @@ mod tests {
         assert_eq!(options.display_name, "Thimble");
         assert_eq!(options.uri, "https://tilegrove.example");
         assert_eq!(options.database, "grove");
+        assert!(!options.headless);
+    }
+
+    #[test]
+    fn play_options_accept_headless_without_a_value() {
+        let args = [
+            "--profile".to_owned(),
+            "aster".to_owned(),
+            "--headless".to_owned(),
+            "--port".to_owned(),
+            "39229".to_owned(),
+        ];
+        let options = parse_play_options(&args).unwrap();
+        assert!(options.headless);
+        assert_eq!(options.control_port, Some(39229));
     }
 }
